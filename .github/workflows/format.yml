@@ -1,0 +1,31 @@
+name: Format
+
+on:
+  workflow_dispatch:
+  pull_request:     
+    types:
+      - opened        
+      - synchronize   
+      - reopened      
+  push:
+    branches:
+      - develop
+      - main
+      - master
+      - quartz-labs:main
+jobs:
+  code:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Install dependencies
+        uses: './.github/actions/install-deps'
+
+      - name: Run Biome
+        run: pnpm format:check
