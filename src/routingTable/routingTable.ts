@@ -118,7 +118,7 @@ class RoutingTable {
 		};
 
 		while (true) {
-			if (closestNodes.length === count || (!canIterateBelow() && !canIterateAbove())) {
+			if (closestNodes.length >= count || (!canIterateBelow() && !canIterateAbove())) {
 				break;
 			}
 
@@ -141,8 +141,8 @@ class RoutingTable {
 			}
 		}
 
-		closestNodes.sort((a, b) => b.distance - a.distance).slice(0, count);
-		return closestNodes.map((c) => c.node);
+		closestNodes.sort((a, b) => a.distance - b.distance);
+		return closestNodes.slice(0, count).map((c) => c.node);
 	}
 
 	private addNodes(key: number, bucketIndex: number, closestNodes: CloseNodes[]) {

@@ -11,10 +11,20 @@ import UDPTransport from "../transports/udp/udpTransport";
 import { MessageType, PacketType, Transports } from "../types/messageTypes";
 import { BroadcastData, DirectData, TcpPacket } from "../types/udpTransportTypes";
 import { extractError } from "../utils/extractError";
-import { chunk, hashKeyAndmapToKeyspace } from "../utils/nodeUtils";
+import { chunk, hashKeyAndmapToKeyspace, XOR } from "../utils/nodeUtils";
 import AbstractNode from "./abstractNode/abstractNode";
 import { ALPHA, BIT_SIZE } from "./constants";
 import { NodeUtils } from "./nodeUtils";
+
+
+interface FindValueResponse {
+  value: string | null;
+  nodeInfo?: {
+    nodeId: number;
+    address: string;
+    port: number;
+  };
+}
 
 type StoreData = MessagePayload<UDPDataInfo & { key?: string; value?: string }>;
 
@@ -142,7 +152,32 @@ class KademliaNode extends AbstractNode {
 	};
 
 	public async store(key: number, value: string) {
-		const closestNodes = this.table.getAllPeers();
+		console.log(`Node ${this.nodeId} initiating store for key ${key}, value: ${value}`);
+		
+		// Find the k-closest nodes to the key (not all peers)
+		const closestNodes = this.table.findNode(key, 3); // Store on 3 closest nodes for redundancy
+		
+		console.log(`Storing on ${closestNodes.length} closest nodes to key ${key}:`, 
+			closestNodes.map(n => ({ 
+				nodeId: n.nodeId, 
+				port: n.port, 
+				distance: XOR(n.nodeId, key) 
+			}))
+		);
+		
+		// If no nodes found or only self, include self
+		if (closestNodes.length === 0 || !closestNodes.find(n => n.nodeId === this.nodeId)) {
+			// Also store locally if we're one of the closest
+			const selfDistance = XOR(this.nodeId, key);
+			const shouldStoreLocally = closestNodes.length < 3 || 
+				closestNodes.some(n => XOR(n.nodeId, key) > selfDistance);
+			
+			if (shouldStoreLocally) {
+				console.log(`Also storing locally on node ${this.nodeId}`);
+				await this.table.nodeStore(key.toString(), value);
+			}
+		}
+		
 		const closestNodesChunked = chunk<Peer>(closestNodes, ALPHA);
 
 		for (const nodes of closestNodesChunked) {
@@ -151,34 +186,80 @@ class KademliaNode extends AbstractNode {
 					key,
 					value,
 				});
-				return await Promise.all(promises);
+				const results = await Promise.all(promises);
+				console.log(`Store operation completed on ${results.length} nodes`);
+				return results;
 			} catch (e) {
 				console.error(e);
 			}
 		}
 	}
 
-	public async findValue(value: string) {
+	public async findValue(value: string): Promise<FindValueResponse | null> {
 		const key = hashKeyAndmapToKeyspace(value);
-		const closeNodesRes = await fetch(`http://localhost:${key + 2000}/getPeers`);
-
-		const { peers: closestNodes } = await closeNodesRes.json();
+		console.log(`Node ${this.nodeId} looking for value "${value}" with key ${key}`);
+		
+		// First check if we have it locally
+		const localValue = await this.table.findValue(key.toString());
+		if (typeof localValue === 'string') {
+			console.log(`Found value locally on node ${this.nodeId}`);
+			return {
+				value: localValue,
+				nodeInfo: {
+					nodeId: this.nodeId,
+					address: this.address,
+					port: this.port
+				}
+			};
+		}
+		
+		// Get the k-closest nodes to the key
+		const closestNodes = this.table.findNode(key, 20);
+		
+		console.log(`Querying ${closestNodes.length} closest nodes for key ${key}:`, 
+			closestNodes.slice(0, 5).map(n => ({ 
+				nodeId: n.nodeId, 
+				port: n.port,
+				distance: XOR(n.nodeId, key)
+			}))
+		);
+		
 		const closestNodesChunked = chunk<Peer>(closestNodes, ALPHA);
+		
 		for (const nodes of closestNodesChunked) {
 			try {
-				const promises = this.sendManyUdp(nodes, MessageType.FindValue, {
-					key,
-				});
-				const resolved = await Promise.all(promises);
-
-				for await (const result of resolved) {
-					if (typeof result === "string") return result;
+				// Track which node we're querying
+				const nodePromises = nodes.map(async (node) => {
+					console.log(`Querying node ${node.nodeId} at port ${node.port} (distance: ${XOR(node.nodeId, key)})`);
+					const result = await this.sendSingleFindValue(node, key);
+					if (result) {
+						console.log(`Found value "${result}" at node ${node.nodeId} (port ${node.port})`);
+						return {
+							value: result,
+							nodeInfo: {
+								nodeId: node.nodeId,
+								address: node.address,
+								port: node.port
+							}
+						};
+					}
 					return null;
+				});
+				
+				const resolved = await Promise.all(nodePromises);
+				
+				for (const result of resolved) {
+					if (result && result.value) {
+						return result as FindValueResponse;
+					}
 				}
 			} catch (e) {
 				console.error(e);
 			}
 		}
+		
+		console.log(`Value not found in the network`);
+		return null;
 	}
 
 	public handleMessage = async (msg: Buffer, info: dgram.RemoteInfo) => {
@@ -226,7 +307,15 @@ class KademliaNode extends AbstractNode {
 				case MessageType.FindValue: {
 					const res = await this.table.findValue(message.data.data.key);
 					const value = res;
-					await this.handleMessageResponse(MessageType.FoundResponse, message, { resId: message.data.data.resId, value });
+					
+					if (value) {
+						console.log(`Node ${this.nodeId} found value for key ${message.data.data.key}: ${value}`);
+					}
+					
+					await this.handleMessageResponse(MessageType.FoundResponse, message, { 
+						resId: message.data.data.resId, 
+						value 
+					});
 					break;
 				}
 				default:
@@ -264,10 +353,10 @@ class KademliaNode extends AbstractNode {
 		});
 
 		this.emitter.once(`response_findValue_${responseId}`, (data: any) => {
-			if (data.error) {
-				return reject(data.error);
-			}
-			resolve(data.data.data.value);
+		if (data.error) {
+			return reject(data.error);
+		}
+		resolve(data.data.data.value);
 		});
 	};
 
@@ -355,6 +444,52 @@ class KademliaNode extends AbstractNode {
 			}
 		}
 	};
+	
+	private async sendSingleFindValue(node: Peer, key: number): Promise<string | null> {
+		try {
+			const to = new Peer(node.nodeId, this.address, node.port);
+			const payload = { resId: v4(), key };
+			const message = NodeUtils.createUdpMessage(MessageType.FindValue, payload, this.nodeContact, to);
+			const result = await this.udpTransport.sendMessage(message, this.udpMessageResolver);
+			
+			// Check if result is a string (the value we're looking for)
+			if (typeof result === 'string') {
+			return result;
+			}
+			
+			return null;
+		} catch (error) {
+			console.error(`Error querying node ${node.nodeId}:`, error);
+			return null;
+		}
+	}
+
+	public debugClosestNodes(value: string) {
+        const key = hashKeyAndmapToKeyspace(value);
+        const allPeers = this.table.getAllPeers();
+        
+        allPeers.push(this.nodeContact);
+        
+        // Sort by XOR distance
+        const sorted = allPeers.sort((a, b) => {
+            const distA = XOR(a.nodeId, key);
+            const distB = XOR(b.nodeId, key);
+            return distA - distB;
+        });
+        
+        console.log(`\nNodes sorted by distance to key ${key} (for value "${value}"):`);
+        sorted.slice(0, 10).forEach((peer, index) => {
+            const distance = XOR(peer.nodeId, key);
+            const isSelf = peer.nodeId === this.nodeId ? " (THIS NODE)" : "";
+            console.log(`${index + 1}. Node ${peer.nodeId} (port ${peer.port}) - XOR distance: ${distance}${isSelf}`);
+        });
+        
+        return sorted.slice(0, 5).map(peer => ({
+            nodeId: peer.nodeId,
+            port: peer.port,
+            distance: XOR(peer.nodeId, key)
+        }));
+    }
 }
 
 export default KademliaNode;

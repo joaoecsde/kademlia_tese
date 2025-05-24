@@ -93,12 +93,43 @@ class BaseController {
 
 	public findValue = async (req: Request, res: Response, next: NextFunction) => {
 		try {
-			const closest = await this.node.findValue(req.params.key);
-			return res.json({ result: closest });
+			const result = await this.node.findValue(req.params.key);
+			
+			if (result && result.value) {
+			return res.json({
+				found: true,
+				value: result.value,
+				nodeInfo: result.nodeInfo,
+				message: `Value found on node ${result.nodeInfo.nodeId} at ${result.nodeInfo.address}:${result.nodeInfo.port}`
+			});
+			} else {
+			return res.json({
+				found: false,
+				value: null,
+				message: "Value not found in the network"
+			});
+			}
 		} catch (error) {
 			next(error);
 		}
 	};
+
+	public debugClosestNodes = async (req: Request, res: Response, next: NextFunction) => {
+    try {
+        const value = req.params.value;
+        const closestNodes = this.node.debugClosestNodes(value);
+        const key = hashKeyAndmapToKeyspace(value);
+        
+        return res.json({ 
+            value,
+            key,
+            closestNodes,
+            message: `Top nodes that should store "${value}" (key: ${key})`
+        });
+    } catch (error) {
+        next(error);
+    }
+};
 }
 
 export default BaseController;
