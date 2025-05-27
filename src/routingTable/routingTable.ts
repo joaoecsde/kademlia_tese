@@ -170,6 +170,7 @@ class RoutingTable {
 	};
 
 	public nodeStore = <T extends MessagePayload<UDPDataInfo>>(key: string, value: string) => {
+		console.log(`RoutingTable storing key ${key}, value type: ${typeof value}, length: ${value?.length}`);
 		this.store.set(Number(key), value);
 	};
 

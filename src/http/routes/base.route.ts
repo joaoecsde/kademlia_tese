@@ -27,6 +27,9 @@ class BaseRoute implements Routes {
 		this.router.get(`${this.path}findValue/:key`, this.baseController.findValue);
 		this.router.get(`${this.path}getPeers`, this.baseController.getNodePeers);
 		this.router.get(`${this.path}debugClosestNodes/:value`, this.baseController.debugClosestNodes);
+
+		this.router.post(`${this.path}registerGateway`, this.baseController.registerGateway);
+  		this.router.get(`${this.path}findGateways/:blockchainId`, this.baseController.findGateways);
 	}
 }
 

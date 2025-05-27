@@ -1,7 +1,8 @@
 import * as dgram from "dgram";
-import { unpack } from "msgpackr";
+import { pack, unpack } from "msgpackr";
 import { v4 } from "uuid";
 import { DiscoveryScheduler } from "../discoveryScheduler/discoveryScheduler";
+import { GatewayInfo, IGatewayInfo } from "../gateway/gateway";
 import { App } from "../http/app";
 import { Message, MessagePayload, UDPDataInfo } from "../message/message";
 import { Peer, PeerJSON } from "../peer/peer";
@@ -16,7 +17,6 @@ import AbstractNode from "./abstractNode/abstractNode";
 import { ALPHA, BIT_SIZE } from "./constants";
 import { NodeUtils } from "./nodeUtils";
 
-
 interface FindValueResponse {
   value: string | null;
   nodeInfo?: {
@@ -26,7 +26,12 @@ interface FindValueResponse {
   };
 }
 
-type StoreData = MessagePayload<UDPDataInfo & { key?: string; value?: string }>;
+type StoreData = MessagePayload<UDPDataInfo & { 
+  key?: string; 
+  value?: string;
+  blockchainId?: string;  // Add for gateway queries
+  gateways?: IGatewayInfo[];  // Add for gateway responses
+}>;
 
 class KademliaNode extends AbstractNode {
 	public readonly nodeContact: Peer;
@@ -36,6 +41,9 @@ class KademliaNode extends AbstractNode {
 
 	public readonly udpTransport: UDPTransport;
 	public readonly wsTransport: WebSocketTransport;
+
+	private gatewayHeartbeat?: NodeJS.Timeout;
+  	private registeredGateways: Map<string, GatewayInfo> = new Map();
 
 	private readonly discScheduler: DiscoveryScheduler;
 	constructor(id: number, port: number) {
@@ -318,6 +326,52 @@ class KademliaNode extends AbstractNode {
 					});
 					break;
 				}
+				case MessageType.FindGateway: {
+					const blockchainId = message.data.data?.blockchainId;
+					if (!blockchainId) {
+						console.error('FindGateway message missing blockchainId');
+						break;
+					}
+					
+					const localGateways: IGatewayInfo[] = [];
+					
+					// Check if we're a gateway for this blockchain
+					if (this.registeredGateways.has(blockchainId)) {
+						const gateway = this.registeredGateways.get(blockchainId)!;
+						if (Date.now() - gateway.timestamp < 3600000) {
+						localGateways.push(gateway);
+						}
+					}
+					
+					// Also check our storage
+					const gatewayKey = hashKeyAndmapToKeyspace(`gateway:${blockchainId}`);
+					const storedValue = await this.table.findValue(gatewayKey.toString());
+					if (typeof storedValue === 'string') {
+						try {
+						const gateway = GatewayInfo.deserialize(storedValue);
+						if (Date.now() - gateway.timestamp < 3600000 &&
+							!localGateways.find(g => g.nodeId === gateway.nodeId)) {
+							localGateways.push(gateway);
+						}
+						} catch (e) {
+						// Invalid stored data
+						}
+					}
+					
+					const msgData = { 
+						resId: message.data.data.resId, 
+						gateways: localGateways
+					};
+					
+					await this.handleMessageResponse(MessageType.GatewayResponse, message, msgData);
+					break;
+					}
+					
+					case MessageType.GatewayResponse: {
+					const resId = message.data.data.resId;
+					this.emitter.emit(`response_gateway_${resId}`, { ...message.data.data, error: null });
+					break;
+				}
 				default:
 					return;
 			}
@@ -332,6 +386,15 @@ class KademliaNode extends AbstractNode {
 		if (type === MessageType.Reply) resolve(params);
 		if (type === MessageType.Pong) resolve(params);
 		if (type === MessageType.FoundResponse) resolve(params);
+
+		if (type === MessageType.GatewayResponse) {
+			this.emitter.once(`response_gateway_${responseId}`, (data: any) => {
+				if (data.error) {
+				return reject(data.error);
+				}
+				resolve(data.gateways || []);
+			});
+		}
 
 		this.emitter.once(`response_reply_${responseId}`, (data: any) => {
 			if (data.error) {
@@ -490,6 +553,290 @@ class KademliaNode extends AbstractNode {
             distance: XOR(peer.nodeId, key)
         }));
     }
+
+
+	// Add gateway registration method
+	public async registerAsGateway(
+		blockchainId: string,
+		endpoint: string,
+		supportedProtocols: string[] = ['SATP']
+	): Promise<GatewayInfo> {
+		const gatewayInfo = new GatewayInfo(
+		blockchainId,
+		this.nodeId,
+		endpoint,
+		supportedProtocols
+		);
+
+		// Store locally
+		this.registeredGateways.set(blockchainId, gatewayInfo);
+
+		// Generate deterministic key for this blockchain's gateways
+		const gatewayKey = hashKeyAndmapToKeyspace(`gateway:${blockchainId}`);
+		
+		console.log(`Node ${this.nodeId} registering as gateway for ${blockchainId}`);
+		
+		// Store in the DHT
+		await this.store(gatewayKey, gatewayInfo.serialize());
+		
+		// Also store under a composite key for direct lookup
+		const compositeKey = hashKeyAndmapToKeyspace(`gateway:${blockchainId}:${this.nodeId}`);
+		await this.store(compositeKey, gatewayInfo.serialize());
+		
+		return gatewayInfo;
+	}
+
+	// Find gateways for a blockchain
+	public async findGateways(blockchainId: string): Promise<IGatewayInfo[]> {
+		console.log(`Node ${this.nodeId} looking for gateways to ${blockchainId}`);
+		
+		const gateways: IGatewayInfo[] = [];
+		
+		// Check if we are a gateway for this blockchain
+		if (this.registeredGateways.has(blockchainId)) {
+		const localGateway = this.registeredGateways.get(blockchainId)!;
+		if (Date.now() - localGateway.timestamp < 3600000) { // 1 hour freshness
+			gateways.push(localGateway);
+		}
+		}
+		
+		// Search the network using existing findValue
+		const gatewayKey = hashKeyAndmapToKeyspace(`gateway:${blockchainId}`);
+		const result = await this.findValue(gatewayKey.toString());
+		
+		if (result && result.value) {
+		try {
+			const gatewayInfo = GatewayInfo.deserialize(result.value);
+			if (Date.now() - gatewayInfo.timestamp < 3600000 &&
+				!gateways.find(g => g.nodeId === gatewayInfo.nodeId)) {
+			gateways.push(gatewayInfo);
+			}
+		} catch (e) {
+			console.error('Error deserializing gateway info:', e);
+		}
+		}
+		
+		// Query other nodes for more gateways
+		const closestNodes = this.table.findNode(gatewayKey, 10);
+		const additionalGateways = await this.queryNodesForGateways(blockchainId, closestNodes);
+		
+		// Merge results, avoiding duplicates
+		for (const gateway of additionalGateways) {
+		if (!gateways.find(g => g.nodeId === gateway.nodeId)) {
+			gateways.push(gateway);
+		}
+		}
+		
+		console.log(`Found ${gateways.length} gateway(s) for ${blockchainId}`);
+		return gateways;
+	}
+
+	private async queryNodesForGateways(blockchainId: string, nodes: Peer[]): Promise<IGatewayInfo[]> {
+		const gatewayPromises = nodes.map(node => this.queryNodeForGateway(blockchainId, node));
+		const results = await Promise.allSettled(gatewayPromises);
+		
+		const allGateways: IGatewayInfo[] = [];
+		for (const result of results) {
+			if (result.status === 'fulfilled' && result.value) {
+			allGateways.push(...result.value);
+			}
+		}
+		
+		return allGateways;
+	}
+
+	private async queryNodeForGateway(blockchainId: string, node: Peer): Promise<IGatewayInfo[]> {
+		return new Promise<IGatewayInfo[]>((resolve) => {
+			const to = new Peer(node.nodeId, this.address, node.port);
+			const payload = { resId: v4(), blockchainId };
+			const message = NodeUtils.createUdpMessage(MessageType.FindGateway, payload, this.nodeContact, to);
+			
+			const timeoutId = setTimeout(() => {
+				this.emitter.removeAllListeners(`response_gateway_${payload.resId}`);
+				resolve([]);
+			}, 2000);
+			
+			this.emitter.once(`response_gateway_${payload.resId}`, (data: any) => {
+				clearTimeout(timeoutId);
+				if (!data.error && data.gateways) {
+					resolve(data.gateways);
+				} else {
+					resolve([]);
+				}
+			});
+			
+			this.udpTransport.server.send(
+			pack(message),
+			message.to.port,
+			this.address,
+			(err) => {
+				if (err) {
+					console.error(`Error sending gateway query to node ${node.nodeId}:`, err);
+					clearTimeout(timeoutId);
+					this.emitter.removeAllListeners(`response_gateway_${payload.resId}`);
+					resolve([]);
+				}
+			}
+			);
+		});
+	}
+
+	// Start periodic refresh
+	public startGatewayHeartbeat(blockchainId: string, endpoint: string, interval: number = 300000): void {
+		this.gatewayHeartbeat = setInterval(async () => {
+		console.log(`Refreshing gateway registration for ${blockchainId}`);
+		await this.registerAsGateway(blockchainId, endpoint);
+		}, interval);
+	}
+
+	public stopGatewayHeartbeat(): void {
+		if (this.gatewayHeartbeat) {
+		clearInterval(this.gatewayHeartbeat);
+		this.gatewayHeartbeat = undefined;
+		}
+	}
+
+	public async bootstrap(nodes: Array<{nodeId: number, address: string, port: number}>): Promise<void> {
+		console.log(`Node ${this.nodeId} bootstrapping with ${nodes.length} node(s)`);
+		
+		for (const node of nodes) {
+			try {
+			// Add node to routing table
+			const peer = new Peer(node.nodeId, node.address, node.port);
+			await this.table.updateTables(peer);
+			
+			// Send a ping to establish contact
+			await this.ping(node.nodeId, node.address, node.port);
+			
+			console.log(`Node ${this.nodeId} successfully connected to bootstrap node ${node.nodeId}`);
+			} catch (error) {
+			console.error(`Failed to connect to bootstrap node ${node.nodeId}:`, error);
+			}
+		}
+		
+		// Perform initial node discovery
+		await this.findNodes(this.nodeId);
+	}
+
+	/**
+	 * Ping a specific node to check if it's alive and add it to routing table
+	 */
+	public async ping(nodeId: number, address: string, port: number): Promise<boolean> {
+		return new Promise((resolve) => {
+			const to = new Peer(nodeId, address, port);
+			const payload = { resId: v4() };
+			const message = NodeUtils.createUdpMessage(MessageType.Ping, payload, this.nodeContact, to);
+			
+			const timeoutId = setTimeout(() => {
+			this.emitter.removeAllListeners(`response_pong_${payload.resId}`);
+			resolve(false);
+			}, 2000);
+			
+			this.emitter.once(`response_pong_${payload.resId}`, () => {
+			clearTimeout(timeoutId);
+			resolve(true);
+			});
+			
+			this.udpTransport.server.send(
+			pack(message),
+			port,
+			address,
+			(err) => {
+				if (err) {
+				clearTimeout(timeoutId);
+				this.emitter.removeAllListeners(`response_pong_${payload.resId}`);
+				resolve(false);
+				}
+			}
+			);
+		});
+	}
+
+	/**
+	 * Gracefully stop the node and clean up resources
+	 */
+	public async stop(): Promise<void> {
+		console.log(`Stopping node ${this.nodeId}...`);
+		
+		try {
+			// Stop gateway heartbeat
+			this.stopGatewayHeartbeat();
+			
+			// Stop discovery scheduler
+			if (this.discScheduler) {
+			this.discScheduler.stopCronJob();
+			}
+			
+			// Remove all event listeners
+			if (this.emitter) {
+			this.emitter.removeAllListeners();
+			}
+			
+			// Close UDP server
+			if (this.udpTransport && this.udpTransport.server) {
+			await new Promise<void>((resolve) => {
+				// dgram.Socket.close() only takes a callback with no parameters
+				this.udpTransport.server.close(() => {
+				resolve();
+				});
+			});
+			}
+			
+			// Close all WebSocket connections
+			if (this.wsTransport) {
+			// Close all active connections
+			if (this.wsTransport.connections) {
+				this.wsTransport.connections.clear();
+			}
+			if (this.wsTransport.neighbors) {
+				this.wsTransport.neighbors.clear();
+			}
+			
+			// Close the server
+			if (this.wsTransport.server) {
+				await new Promise<void>((resolve) => {
+				this.wsTransport.server.close(() => {
+					resolve();
+				});
+				});
+			}
+			}
+			
+			// Close HTTP API server
+			if (this.api && (this.api as any).server) {
+			await new Promise<void>((resolve) => {
+				(this.api as any).server.close(() => {
+				resolve();
+				});
+			});
+			}
+			
+			console.log(`Node ${this.nodeId} stopped successfully`);
+		} catch (error) {
+			console.error(`Error stopping node ${this.nodeId}:`, error);
+		}
+	}
+
+	/**
+	 * Get current status of the node
+	 */
+	public getStatus(): {
+		nodeId: number;
+		port: number;
+		httpPort: number;
+		peers: number;
+		buckets: number;
+		registeredGateways: string[];
+		} {
+		return {
+			nodeId: this.nodeId,
+			port: this.port,
+			httpPort: this.port - 1000,
+			peers: this.table.getAllPeers().length,
+			buckets: this.table.getAllBucketsLen(),
+			registeredGateways: Array.from(this.registeredGateways.keys())
+		};
+	}
 }
 
 export default KademliaNode;

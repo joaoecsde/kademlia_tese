@@ -115,21 +115,75 @@ class BaseController {
 	};
 
 	public debugClosestNodes = async (req: Request, res: Response, next: NextFunction) => {
-    try {
-        const value = req.params.value;
-        const closestNodes = this.node.debugClosestNodes(value);
-        const key = hashKeyAndmapToKeyspace(value);
-        
-        return res.json({ 
-            value,
-            key,
-            closestNodes,
-            message: `Top nodes that should store "${value}" (key: ${key})`
-        });
-    } catch (error) {
-        next(error);
-    }
-};
+		try {
+			const value = req.params.value;
+			const closestNodes = this.node.debugClosestNodes(value);
+			const key = hashKeyAndmapToKeyspace(value);
+			
+			return res.json({ 
+				value,
+				key,
+				closestNodes,
+				message: `Top nodes that should store "${value}" (key: ${key})`
+			});
+		} catch (error) {
+			next(error);
+		}
+	};
+	
+	public registerGateway = async (req: Request, res: Response, next: NextFunction) => {
+		try {
+			const { blockchainId, endpoint, protocols } = req.body;
+			
+			if (!blockchainId || !endpoint) {
+			return res.status(400).json({ 
+				error: 'blockchainId and endpoint are required' 
+			});
+			}
+			
+			const gatewayInfo = await this.node.registerAsGateway(
+			blockchainId,
+			endpoint,
+			protocols || ['SATP']
+			);
+			
+			// Start heartbeat
+			this.node.startGatewayHeartbeat(blockchainId, endpoint);
+			
+			return res.json({
+			success: true,
+			gateway: gatewayInfo,
+			message: `Node ${this.node.nodeId} registered as gateway for ${blockchainId}`
+			});
+		} catch (error) {
+			next(error);
+		}
+		};
+
+		public findGateways = async (req: Request, res: Response, next: NextFunction) => {
+		try {
+			const { blockchainId } = req.params;
+			
+			if (!blockchainId) {
+			return res.status(400).json({ 
+				error: 'blockchainId is required' 
+			});
+			}
+			
+			const gateways = await this.node.findGateways(blockchainId);
+			
+			return res.json({
+			blockchainId,
+			gateways,
+			count: gateways.length,
+			message: gateways.length > 0 
+				? `Found ${gateways.length} gateway(s) for ${blockchainId}`
+				: `No gateways found for ${blockchainId}`
+			});
+		} catch (error) {
+			next(error);
+		}
+		};
 }
 
 export default BaseController;
