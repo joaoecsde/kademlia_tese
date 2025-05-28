@@ -217,17 +217,19 @@ class BaseController {
 				Array.isArray(supportedProtocols) ? supportedProtocols : [supportedProtocols]
 			);
 			
-			// Generate storage keys
-			const gatewayKey = hashKeyAndmapToKeyspace(`gateway:${blockchainId}`);
-			const compositeKey = hashKeyAndmapToKeyspace(`gateway:${blockchainId}:${nodeId}`);
+			// Use unique keys to prevent mixing blockchains
+			// Primary key: for finding all gateways of this blockchain
+			const gatewayKey = hashKeyAndmapToKeyspace(`gw-${blockchainId}`);
+			// Specific key: for this exact gateway instance
+			const specificKey = hashKeyAndmapToKeyspace(`gw-${blockchainId}-${nodeId}`);
 			
 			console.log(`Manually storing gateway for ${blockchainId}, nodeId: ${nodeId}`);
-			console.log(`Storage keys - Gateway: ${gatewayKey}, Composite: ${compositeKey}`);
+			console.log(`Storage keys - Primary: ${gatewayKey}, Specific: ${specificKey}`);
 			
-			// Store in DHT using both keys
+			// Store using both keys
 			const results = await Promise.allSettled([
 				this.node.store(gatewayKey, gatewayInfo.serialize()),
-				this.node.store(compositeKey, gatewayInfo.serialize())
+				this.node.store(specificKey, gatewayInfo.serialize())
 			]);
 			
 			const successful = results.filter(r => r.status === 'fulfilled').length;
@@ -242,7 +244,7 @@ class BaseController {
 					failed,
 					keys: {
 						gatewayKey,
-						compositeKey
+						specificKey
 					}
 				}
 			});
@@ -285,20 +287,21 @@ class BaseController {
 				supportedProtocols
 			);
 			
-			// Generate storage keys
-			const gatewayKey = hashKeyAndmapToKeyspace(`gateway:${blockchainId}`);
-			const compositeKey = hashKeyAndmapToKeyspace(`gateway:${blockchainId}:${nodeId}`);
+			// Use unique keys to prevent mixing blockchains
+			const gatewayKey = hashKeyAndmapToKeyspace(`gw-${blockchainId}`);
+			const specificKey = hashKeyAndmapToKeyspace(`gw-${blockchainId}-${nodeId}`);
 			
 			console.log(`Manually storing gateway via URL params:`);
 			console.log(`- Blockchain: ${blockchainId}`);
 			console.log(`- Node ID: ${nodeId}`);
 			console.log(`- Endpoint: ${decodedEndpoint}`);
 			console.log(`- Protocols: ${supportedProtocols.join(', ')}`);
+			console.log(`- Keys: Primary=${gatewayKey}, Specific=${specificKey}`);
 			
 			// Store in DHT
 			const results = await Promise.allSettled([
 				this.node.store(gatewayKey, gatewayInfo.serialize()),
-				this.node.store(compositeKey, gatewayInfo.serialize())
+				this.node.store(specificKey, gatewayInfo.serialize())
 			]);
 			
 			const successful = results.filter(r => r.status === 'fulfilled').length;
@@ -320,7 +323,7 @@ class BaseController {
 					totalAttempts: 2,
 					keys: {
 						gatewayKey,
-						compositeKey
+						specificKey
 					}
 				},
 				usage: {
@@ -334,6 +337,51 @@ class BaseController {
 			next(error);
 		}
 	};
+
+	public debugStorage = async (req: Request, res: Response, next: NextFunction) => {
+		try {
+			const { key } = req.params;
+			
+			if (!key) {
+				return res.status(400).json({ error: 'Key parameter required' });
+			}
+			
+			// Try to find the value directly
+			const numericKey = Number(key);
+			const result = await this.node.table.findValue(key);
+			
+			// Also check with hashed version
+			const hashedKey = hashKeyAndmapToKeyspace(key);
+			const hashedResult = await this.node.table.findValue(hashedKey.toString());
+			
+			// Get all stored keys for debugging
+			const allPeers = this.node.table.getAllPeers();
+			
+			return res.json({
+				key,
+				numericKey,
+				hashedKey,
+				directResult: result,
+				hashedResult,
+				resultType: typeof result,
+				hashedResultType: typeof hashedResult,
+				nodeInfo: {
+					nodeId: this.node.nodeId,
+					totalPeers: allPeers.length,
+					buckets: this.node.table.getAllBucketsLen()
+				},
+				// Show what we're actually storing locally
+				localStorage: (this.node.table as any).store ? 
+					Array.from((this.node.table as any).store.entries()).slice(0, 10) : 
+					'Storage not accessible'
+			});
+			
+		} catch (error) {
+			console.error('Debug storage error:', error);
+			next(error);
+		}
+	};
+
 }
 
 export default BaseController;

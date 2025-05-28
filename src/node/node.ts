@@ -345,8 +345,15 @@ class KademliaNode extends AbstractNode {
 					const res = await this.table.findValue(message.data.data.key);
 					const value = res;
 					
-					if (value) {
-						console.log(`Node ${this.nodeId} found value for key ${message.data.data.key}: ${value}`);
+					if (value && typeof value === 'string') {
+						// Fix the logging to properly display the value
+						const displayValue = value.substring(0, 100);
+						console.log(`Node ${this.nodeId} found value for key ${message.data.data.key}: ${displayValue}${value.length > 100 ? '...' : ''}`);
+					} else if (value) {
+						// This case should not happen for gateway data, but let's see what it is
+						console.log(`Node ${this.nodeId} found NON-STRING value for key ${message.data.data.key}:`, typeof value, Array.isArray(value) ? `Array[${value.length}]` : value);
+					} else {
+						console.log(`Node ${this.nodeId} did not find value for key ${message.data.data.key}`);
 					}
 					
 					await this.handleMessageResponse(MessageType.FoundResponse, message, { 
@@ -356,50 +363,58 @@ class KademliaNode extends AbstractNode {
 					break;
 				}
 				case MessageType.FindGateway: {
-					const blockchainId = message.data.data?.blockchainId;
-					if (!blockchainId) {
-						console.error('FindGateway message missing blockchainId');
+						const blockchainId = message.data.data?.blockchainId;
+						if (!blockchainId) {
+							console.error('FindGateway message missing blockchainId');
+							break;
+						}
+						
+						console.log(`Node ${this.nodeId} received FindGateway request for ${blockchainId}`);
+						
+						const localGateways: IGatewayInfo[] = [];
+						
+						// Check if we're a gateway for this blockchain
+						if (this.registeredGateways.has(blockchainId)) {
+							const gateway = this.registeredGateways.get(blockchainId)!;
+							if (Date.now() - gateway.timestamp < 3600000) {
+								localGateways.push(gateway);
+								console.log(`Found local registered gateway for ${blockchainId}`);
+							}
+						}
+						
+						// Also check our storage using the NEW key format
+						const gatewayKey = hashKeyAndmapToKeyspace(`gw-${blockchainId}`);
+						console.log(`Checking local storage for key: ${gatewayKey}`);
+						
+						const storedValue = await this.table.findValue(gatewayKey.toString());
+						if (typeof storedValue === 'string') {
+							console.log(`Found stored value for ${blockchainId}:`, storedValue.substring(0, 100));
+							try {
+								const parsedGateways = this.parseGatewayData(storedValue);
+								for (const gateway of parsedGateways) {
+									if (gateway.blockchainId === blockchainId &&
+										Date.now() - gateway.timestamp < 3600000 &&
+										!localGateways.find(g => g.nodeId === gateway.nodeId)) {
+										localGateways.push(gateway);
+										console.log(`Added stored gateway for ${blockchainId}: node ${gateway.nodeId}`);
+									}
+								}
+							} catch (e) {
+								console.error('Error parsing stored gateway data:', e);
+							}
+						} else {
+							console.log(`No stored value found for key ${gatewayKey}`);
+						}
+						
+						console.log(`Responding with ${localGateways.length} gateways for ${blockchainId}`);
+						
+						const msgData = { 
+							resId: message.data.data.resId, 
+							gateways: localGateways
+						};
+						
+						await this.handleMessageResponse(MessageType.GatewayResponse, message, msgData);
 						break;
-					}
-					
-					const localGateways: IGatewayInfo[] = [];
-					
-					// Check if we're a gateway for this blockchain
-					if (this.registeredGateways.has(blockchainId)) {
-						const gateway = this.registeredGateways.get(blockchainId)!;
-						if (Date.now() - gateway.timestamp < 3600000) {
-						localGateways.push(gateway);
-						}
-					}
-					
-					// Also check our storage
-					const gatewayKey = hashKeyAndmapToKeyspace(`gateway:${blockchainId}`);
-					const storedValue = await this.table.findValue(gatewayKey.toString());
-					if (typeof storedValue === 'string') {
-						try {
-						const gateway = GatewayInfo.deserialize(storedValue);
-						if (Date.now() - gateway.timestamp < 3600000 &&
-							!localGateways.find(g => g.nodeId === gateway.nodeId)) {
-							localGateways.push(gateway);
-						}
-						} catch (e) {
-						// Invalid stored data
-						}
-					}
-					
-					const msgData = { 
-						resId: message.data.data.resId, 
-						gateways: localGateways
-					};
-					
-					await this.handleMessageResponse(MessageType.GatewayResponse, message, msgData);
-					break;
-					}
-					
-					case MessageType.GatewayResponse: {
-					const resId = message.data.data.resId;
-					this.emitter.emit(`response_gateway_${resId}`, { ...message.data.data, error: null });
-					break;
 				}
 				default:
 					return;
@@ -412,6 +427,7 @@ class KademliaNode extends AbstractNode {
 
 	public udpMessageResolver = (params: any, resolve: (value?: unknown) => void, reject: (reason?: any) => void) => {
 		const { type, responseId } = params;
+		
 		if (type === MessageType.Reply) resolve(params);
 		if (type === MessageType.Pong) resolve(params);
 		if (type === MessageType.FoundResponse) resolve(params);
@@ -419,7 +435,7 @@ class KademliaNode extends AbstractNode {
 		if (type === MessageType.GatewayResponse) {
 			this.emitter.once(`response_gateway_${responseId}`, (data: any) => {
 				if (data.error) {
-				return reject(data.error);
+					return reject(data.error);
 				}
 				resolve(data.gateways || []);
 			});
@@ -444,11 +460,31 @@ class KademliaNode extends AbstractNode {
 			resolve(data);
 		});
 
+		// FIX: This is the critical part for findValue responses
 		this.emitter.once(`response_findValue_${responseId}`, (data: any) => {
-		if (data.error) {
-			return reject(data.error);
-		}
-		resolve(data.data.data.value);
+			if (data.error) {
+				return reject(data.error);
+			}
+			
+			// The issue is here - we need to properly extract the value
+			console.log(`Processing findValue response:`, {
+				hasData: !!data,
+				dataType: typeof data,
+				hasDataData: !!(data && data.data),
+				hasValue: !!(data && data.data && data.data.data && data.data.data.value),
+				rawValue: data && data.data && data.data.data ? data.data.data.value : 'not found'
+			});
+			
+			// Extract the actual value properly
+			const actualValue = data && data.data && data.data.data ? data.data.data.value : null;
+			
+			if (actualValue && typeof actualValue === 'string') {
+				console.log(`✅ Resolved findValue with string value: ${actualValue.substring(0, 100)}...`);
+				resolve(actualValue);
+			} else {
+				console.log(`❌ FindValue returned non-string or null:`, typeof actualValue, actualValue);
+				resolve(null);
+			}
 		});
 	};
 
@@ -536,22 +572,39 @@ class KademliaNode extends AbstractNode {
 			}
 		}
 	};
-	
+		
 	private async sendSingleFindValue(node: Peer, key: number): Promise<string | null> {
 		try {
 			const to = new Peer(node.nodeId, this.address, node.port);
 			const payload = { resId: v4(), key };
 			const message = NodeUtils.createUdpMessage(MessageType.FindValue, payload, this.nodeContact, to);
+			
+			console.log(`Sending FindValue request to node ${node.nodeId} for key ${key}`);
+			
 			const result = await this.udpTransport.sendMessage(message, this.udpMessageResolver);
+			
+			console.log(`Received response from node ${node.nodeId}:`, {
+				resultType: typeof result,
+				isString: typeof result === 'string',
+				length: typeof result === 'string' ? (result as string).length : 'N/A',
+				preview: typeof result === 'string' ? (result as string).substring(0, 100) : String(result)
+			});
 			
 			// Check if result is a string (the value we're looking for)
 			if (typeof result === 'string') {
-			return result;
+				return result;
+			}
+			
+			// If it's not a string, it might be in a nested structure
+			if (result && typeof result === 'object' && (result as any).value) {
+				console.log(`Extracting value from nested result:`, typeof (result as any).value);
+				const nestedValue = (result as any).value;
+				return typeof nestedValue === 'string' ? nestedValue : null;
 			}
 			
 			return null;
 		} catch (error) {
-			console.error(`Error querying node ${node.nodeId}:`, error);
+			console.error(`Error querying node ${node.nodeId}:`, error.message);
 			return null;
 		}
 	}
@@ -590,89 +643,117 @@ class KademliaNode extends AbstractNode {
 		endpoint: string,
 		supportedProtocols: string[] = ['SATP']
 	): Promise<GatewayInfo> {
+		console.log(`Node ${this.nodeId} registering as gateway for ${blockchainId}`);
+		
 		const gatewayInfo = new GatewayInfo(
-		blockchainId,
-		this.nodeId,
-		endpoint,
-		supportedProtocols
+			blockchainId,
+			this.nodeId,
+			endpoint,
+			supportedProtocols
 		);
 
 		// Store locally
 		this.registeredGateways.set(blockchainId, gatewayInfo);
 
-		// Generate deterministic key for this blockchain's gateways
-		const gatewayKey = hashKeyAndmapToKeyspace(`gateway:${blockchainId}`);
+		// Use consistent key format with storage and search methods
+		const gatewayKey = hashKeyAndmapToKeyspace(`gw-${blockchainId}`);
+		const specificKey = hashKeyAndmapToKeyspace(`gw-${blockchainId}-${this.nodeId}`);
 		
-		console.log(`Node ${this.nodeId} registering as gateway for ${blockchainId}`);
+		console.log(`Storing with keys: Primary=${gatewayKey}, Specific=${specificKey}`);
 		
-		// Store in the DHT
-		await this.store(gatewayKey, gatewayInfo.serialize());
+		// Store in the DHT using both keys
+		await Promise.allSettled([
+			this.store(gatewayKey, gatewayInfo.serialize()),
+			this.store(specificKey, gatewayInfo.serialize())
+		]);
 		
-		// Also store under a composite key for direct lookup
-		const compositeKey = hashKeyAndmapToKeyspace(`gateway:${blockchainId}:${this.nodeId}`);
-		await this.store(compositeKey, gatewayInfo.serialize());
-		
+		console.log(`Gateway registration completed for ${blockchainId}`);
 		return gatewayInfo;
 	}
 
 	// Find gateways for a blockchain
 	public async findGateways(blockchainId: string): Promise<IGatewayInfo[]> {
-		console.log(`Node ${this.nodeId} looking for gateways to ${blockchainId}`);
+		console.log(`\n=== Node ${this.nodeId} looking for gateways to ${blockchainId} ===`);
 		
 		const gateways: IGatewayInfo[] = [];
+		const gatewayKey = hashKeyAndmapToKeyspace(`gw-${blockchainId}`);
 		
-		// Check if we are a gateway for this blockchain
+		console.log(`Generated key: gw-${blockchainId} -> ${gatewayKey}`);
+		
+		// 1. Check local registered gateways
 		if (this.registeredGateways.has(blockchainId)) {
 			const localGateway = this.registeredGateways.get(blockchainId)!;
-			if (Date.now() - localGateway.timestamp < 3600000) { // 1 hour freshness
+			console.log(`✅ Found in local registered gateways`);
 			gateways.push(localGateway);
-			}
+		} else {
+			console.log(`❌ Not found in local registered gateways`);
 		}
 		
-		// Search the network using existing findValue
-		const gatewayKey = hashKeyAndmapToKeyspace(`gateway:${blockchainId}`);
-		const result = await this.findValue(gatewayKey.toString());
-		
-		if (result && result.value) {
-			try {
-			console.log(`Found raw value for gateway:${blockchainId}:`, {
-				type: typeof result.value,
-				length: result.value.length,
-				content: result.value.substring(0, 100) + (result.value.length > 100 ? '...' : ''),
-				startsWithBrace: result.value.startsWith('{'),
-				endsWithBrace: result.value.endsWith('}')
+		// 2. Check local storage directly using the numeric key
+		console.log(`\n--- Checking local storage ---`);
+		try {
+			const localValue = await this.table.findValue(gatewayKey.toString());
+			console.log(`Local storage result:`, {
+				found: localValue !== undefined,
+				type: typeof localValue,
+				isString: typeof localValue === 'string',
+				length: typeof localValue === 'string' ? localValue.length : 'N/A',
+				preview: typeof localValue === 'string' ? localValue.substring(0, 100) : localValue
 			});
 			
-			// Validate that it looks like JSON before parsing
-			if (typeof result.value === 'string' && result.value.trim().startsWith('{')) {
-				const gatewayInfo = GatewayInfo.deserialize(result.value);
-				if (Date.now() - gatewayInfo.timestamp < 3600000 &&
-				!gateways.find(g => g.nodeId === gatewayInfo.nodeId)) {
-				gateways.push(gatewayInfo);
+			if (typeof localValue === 'string') {
+				try {
+					const gateway = GatewayInfo.deserialize(localValue);
+					console.log(`✅ Successfully parsed local gateway: ${gateway.blockchainId} (node ${gateway.nodeId})`);
+					
+					if (gateway.blockchainId === blockchainId && 
+						!gateways.find(g => g.nodeId === gateway.nodeId)) {
+						gateways.push(gateway);
+					}
+				} catch (parseError) {
+					console.error(`❌ Failed to parse local storage value:`, parseError.message);
 				}
-			} else {
-				console.error(`Invalid gateway data format for ${blockchainId}:`, result.value);
 			}
-			} catch (e) {
-			console.error('Error deserializing gateway info:', e);
-			console.error('Raw value that caused error:', result.value);
-			console.error('Value type:', typeof result.value);
-			console.error('Value length:', result.value?.length);
-			}
+		} catch (storageError) {
+			console.error(`❌ Error accessing local storage:`, storageError);
 		}
 		
-		// Query other nodes for more gateways
-		const closestNodes = this.table.findNode(gatewayKey, 10);
-		const additionalGateways = await this.queryNodesForGateways(blockchainId, closestNodes);
-		
-		// Merge results, avoiding duplicates
-		for (const gateway of additionalGateways) {
-			if (!gateways.find(g => g.nodeId === gateway.nodeId)) {
-			gateways.push(gateway);
+		// 3. Check network using DIRECT KEY LOOKUP (not findValue which hashes again)
+		console.log(`\n--- Checking network with direct key lookup ---`);
+		try {
+			// Instead of using findValue (which hashes the key again), 
+			// use sendSingleFindValue with the numeric key directly
+			const closestNodes = this.table.findNode(gatewayKey, 10);
+			console.log(`Querying ${closestNodes.length} nodes with key ${gatewayKey} directly`);
+			
+			for (const node of closestNodes) {
+				try {
+					const result = await this.sendSingleFindValue(node, gatewayKey);
+					if (result && typeof result === 'string') {
+						console.log(`✅ Found gateway data from node ${node.nodeId}`);
+						
+						const gateway = GatewayInfo.deserialize(result);
+						if (gateway.blockchainId === blockchainId && 
+							!gateways.find(g => g.nodeId === gateway.nodeId)) {
+							gateways.push(gateway);
+							console.log(`✅ Added gateway from network: ${gateway.blockchainId} (node ${gateway.nodeId})`);
+						}
+						break; // Found what we needed
+					}
+				} catch (error) {
+					console.log(`❌ Error querying node ${node.nodeId}:`, error.message);
+				}
 			}
+		} catch (networkError) {
+			console.error(`❌ Network search error:`, networkError);
 		}
 		
-		console.log(`Found ${gateways.length} gateway(s) for ${blockchainId}`);
+		console.log(`\n=== Final result: ${gateways.length} gateway(s) for ${blockchainId} ===`);
+		gateways.forEach((gw, i) => {
+			console.log(`${i + 1}. ${gw.blockchainId} - node ${gw.nodeId} - ${gw.endpoint}`);
+		});
+		console.log(`==========================================\n`);
+		
 		return gateways;
 	}
 
@@ -881,6 +962,66 @@ class KademliaNode extends AbstractNode {
 			buckets: this.table.getAllBucketsLen(),
 			registeredGateways: Array.from(this.registeredGateways.keys())
 		};
+	}
+
+	// Add this helper method to properly parse gateway data
+	private parseGatewayData(data: string): IGatewayInfo[] {
+		const gateways: IGatewayInfo[] = [];
+		
+		if (!data || typeof data !== 'string') {
+			console.log('No data or invalid data type');
+			return gateways;
+		}
+		
+		// Try parsing as single JSON object first
+		try {
+			const singleGateway = GatewayInfo.deserialize(data);
+			gateways.push(singleGateway);
+			console.log(`✅ Parsed single gateway: ${singleGateway.blockchainId} (node ${singleGateway.nodeId})`);
+			return gateways;
+		} catch (singleError) {
+			console.log(`Single JSON parse failed: ${singleError.message}`);
+		}
+		
+		// Handle concatenated JSON objects (multiple gateways stored under same key)
+		try {
+			// Split on }{ pattern which indicates concatenated JSON
+			const parts = data.split('}{');
+			
+			if (parts.length === 1) {
+				console.log('Single malformed JSON:', data.substring(0, 100));
+				return gateways;
+			}
+			
+			console.log(`Found ${parts.length} concatenated JSON parts`);
+			
+			// Multiple JSON objects found - reconstruct proper JSON
+			for (let i = 0; i < parts.length; i++) {
+				let jsonStr = parts[i];
+				
+				// Reconstruct proper JSON brackets
+				if (i === 0) {
+					jsonStr = jsonStr + '}';
+				} else if (i === parts.length - 1) {
+					jsonStr = '{' + jsonStr;
+				} else {
+					jsonStr = '{' + jsonStr + '}';
+				}
+				
+				try {
+					const gateway = GatewayInfo.deserialize(jsonStr);
+					gateways.push(gateway);
+					console.log(`✅ Parsed concatenated gateway ${i}: ${gateway.blockchainId} (node ${gateway.nodeId})`);
+				} catch (parseError) {
+					console.log(`❌ Failed to parse JSON part ${i}: ${parseError.message}`);
+					console.log(`Problematic JSON: ${jsonStr.substring(0, 100)}`);
+				}
+			}
+		} catch (splitError) {
+			console.error('Error parsing concatenated gateway data:', splitError);
+		}
+		
+		return gateways;
 	}
 }
 

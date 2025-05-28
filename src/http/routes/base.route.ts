@@ -33,6 +33,8 @@ class BaseRoute implements Routes {
 
 		this.router.post(`${this.path}storeGateway`, this.baseController.storeGateway);
 		this.router.get(`${this.path}storeGateway/:blockchainId/:nodeId/:endpoint`, this.baseController.storeGatewaySimple);
+
+		this.router.get(`${this.path}debugStorage/:key`, this.baseController.debugStorage);
 	}
 }
 
