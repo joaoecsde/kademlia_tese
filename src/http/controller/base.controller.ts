@@ -1,4 +1,5 @@
 import { NextFunction, Request, Response } from "express";
+import { GatewayInfo } from "../../gateway/gateway";
 import KademliaNode from "../../node/node";
 import { MessageType, Transports } from "../../types/messageTypes";
 import { BroadcastData, DirectData } from "../../types/udpTransportTypes";
@@ -183,7 +184,156 @@ class BaseController {
 		} catch (error) {
 			next(error);
 		}
-		};
+	};
+
+	/**
+	 * POST /storeGateway
+	 * Store gateway information manually via JSON payload
+	 * 
+	 * Example request body:
+	 * {
+	 *   "blockchainId": "ethereum",
+	 *   "nodeId": 12345,
+	 *   "endpoint": "http://gateway.example.com:8545",
+	 *   "supportedProtocols": ["SATP", "ILP"]
+	 * }
+	*/
+	public storeGateway = async (req: Request, res: Response, next: NextFunction) => {
+		try {
+			const { blockchainId, nodeId, endpoint, supportedProtocols = ['SATP'] } = req.body;
+			
+			// Validate required fields
+			if (!blockchainId || !nodeId || !endpoint) {
+				return res.status(400).json({
+					error: 'Missing required fields: blockchainId, nodeId, and endpoint are required'
+				});
+			}
+			
+			// Create gateway info object
+			const gatewayInfo = new GatewayInfo(
+				blockchainId,
+				parseInt(nodeId),
+				endpoint,
+				Array.isArray(supportedProtocols) ? supportedProtocols : [supportedProtocols]
+			);
+			
+			// Generate storage keys
+			const gatewayKey = hashKeyAndmapToKeyspace(`gateway:${blockchainId}`);
+			const compositeKey = hashKeyAndmapToKeyspace(`gateway:${blockchainId}:${nodeId}`);
+			
+			console.log(`Manually storing gateway for ${blockchainId}, nodeId: ${nodeId}`);
+			console.log(`Storage keys - Gateway: ${gatewayKey}, Composite: ${compositeKey}`);
+			
+			// Store in DHT using both keys
+			const results = await Promise.allSettled([
+				this.node.store(gatewayKey, gatewayInfo.serialize()),
+				this.node.store(compositeKey, gatewayInfo.serialize())
+			]);
+			
+			const successful = results.filter(r => r.status === 'fulfilled').length;
+			const failed = results.filter(r => r.status === 'rejected').length;
+			
+			return res.json({
+				success: true,
+				message: `Gateway stored successfully`,
+				gateway: gatewayInfo,
+				storage: {
+					successful,
+					failed,
+					keys: {
+						gatewayKey,
+						compositeKey
+					}
+				}
+			});
+			
+		} catch (error) {
+			console.error('Error storing gateway:', error);
+			next(error);
+		}
+	};
+
+	/**
+	 * GET /storeGateway/:blockchainId/:nodeId/:endpoint
+	 * Store gateway information via URL parameters (simpler for testing)
+	 * 
+	 * Example: GET /storeGateway/ethereum/12345/http%3A%2F%2Fgateway.example.com%3A8545
+	 */
+	public storeGatewaySimple = async (req: Request, res: Response, next: NextFunction) => {
+		try {
+			const { blockchainId, nodeId, endpoint } = req.params;
+			const { protocols } = req.query;
+			
+			// Parse protocols from query parameter
+			let supportedProtocols = ['SATP']; // default
+			if (protocols) {
+				supportedProtocols = typeof protocols === 'string' 
+					? protocols.split(',').map(p => p.trim())
+					: Array.isArray(protocols) 
+						? protocols.map(p => String(p).trim())
+						: ['SATP'];
+			}
+			
+			// Decode URL-encoded endpoint
+			const decodedEndpoint = decodeURIComponent(endpoint);
+			
+			// Create gateway info object
+			const gatewayInfo = new GatewayInfo(
+				blockchainId,
+				parseInt(nodeId),
+				decodedEndpoint,
+				supportedProtocols
+			);
+			
+			// Generate storage keys
+			const gatewayKey = hashKeyAndmapToKeyspace(`gateway:${blockchainId}`);
+			const compositeKey = hashKeyAndmapToKeyspace(`gateway:${blockchainId}:${nodeId}`);
+			
+			console.log(`Manually storing gateway via URL params:`);
+			console.log(`- Blockchain: ${blockchainId}`);
+			console.log(`- Node ID: ${nodeId}`);
+			console.log(`- Endpoint: ${decodedEndpoint}`);
+			console.log(`- Protocols: ${supportedProtocols.join(', ')}`);
+			
+			// Store in DHT
+			const results = await Promise.allSettled([
+				this.node.store(gatewayKey, gatewayInfo.serialize()),
+				this.node.store(compositeKey, gatewayInfo.serialize())
+			]);
+			
+			const successful = results.filter(r => r.status === 'fulfilled').length;
+			const failed = results.filter(r => r.status === 'rejected').length;
+			
+			return res.json({
+				success: true,
+				message: `Gateway for ${blockchainId} stored successfully`,
+				gateway: {
+					blockchainId,
+					nodeId: parseInt(nodeId),
+					endpoint: decodedEndpoint,
+					supportedProtocols,
+					timestamp: gatewayInfo.timestamp
+				},
+				storage: {
+					successful,
+					failed,
+					totalAttempts: 2,
+					keys: {
+						gatewayKey,
+						compositeKey
+					}
+				},
+				usage: {
+					findEndpoint: `/findGateways/${blockchainId}`,
+					example: `curl http://localhost:${this.node.port - 1000}/findGateways/${blockchainId}`
+				}
+			});
+			
+		} catch (error) {
+			console.error('Error storing gateway via URL params:', error);
+			next(error);
+		}
+	};
 }
 
 export default BaseController;

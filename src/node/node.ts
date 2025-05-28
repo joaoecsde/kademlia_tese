@@ -45,6 +45,10 @@ class KademliaNode extends AbstractNode {
 	private gatewayHeartbeat?: NodeJS.Timeout;
   	private registeredGateways: Map<string, GatewayInfo> = new Map();
 
+	public getRegisteredGateways(): ReadonlyMap<string, GatewayInfo> {
+  		return this.registeredGateways;
+	}
+
 	private readonly discScheduler: DiscoveryScheduler;
 	constructor(id: number, port: number) {
 		super(id, port, "kademlia");
@@ -160,16 +164,22 @@ class KademliaNode extends AbstractNode {
 	};
 
 	public async store(key: number, value: string) {
-		console.log(`Node ${this.nodeId} initiating store for key ${key}, value: ${value}`);
+		console.log(`Node ${this.nodeId} initiating store for key ${key}, value type: ${typeof value}, value: ${value?.substring(0, 100)}...`);
+  
+		// Ensure value is a string
+		if (typeof value !== 'string') {
+			console.error(`Store method received non-string value:`, value);
+			value = typeof value === 'object' ? JSON.stringify(value) : String(value);
+		}
 		
 		// Find the k-closest nodes to the key (not all peers)
 		const closestNodes = this.table.findNode(key, 3); // Store on 3 closest nodes for redundancy
 		
 		console.log(`Storing on ${closestNodes.length} closest nodes to key ${key}:`, 
 			closestNodes.map(n => ({ 
-				nodeId: n.nodeId, 
-				port: n.port, 
-				distance: XOR(n.nodeId, key) 
+			nodeId: n.nodeId, 
+			port: n.port, 
+			distance: XOR(n.nodeId, key) 
 			}))
 		);
 		
@@ -178,11 +188,11 @@ class KademliaNode extends AbstractNode {
 			// Also store locally if we're one of the closest
 			const selfDistance = XOR(this.nodeId, key);
 			const shouldStoreLocally = closestNodes.length < 3 || 
-				closestNodes.some(n => XOR(n.nodeId, key) > selfDistance);
+			closestNodes.some(n => XOR(n.nodeId, key) > selfDistance);
 			
 			if (shouldStoreLocally) {
-				console.log(`Also storing locally on node ${this.nodeId}`);
-				await this.table.nodeStore(key.toString(), value);
+			console.log(`Also storing locally on node ${this.nodeId}, value: ${value?.substring(0, 50)}...`);
+			await this.table.nodeStore(key.toString(), value);
 			}
 		}
 		
@@ -190,15 +200,15 @@ class KademliaNode extends AbstractNode {
 
 		for (const nodes of closestNodesChunked) {
 			try {
-				const promises = this.sendManyUdp(nodes, MessageType.Store, {
-					key,
-					value,
-				});
-				const results = await Promise.all(promises);
-				console.log(`Store operation completed on ${results.length} nodes`);
-				return results;
+			const promises = this.sendManyUdp(nodes, MessageType.Store, {
+				key,
+				value, // Make sure this is a string
+			});
+			const results = await Promise.all(promises);
+			console.log(`Store operation completed on ${results.length} nodes`);
+			return results;
 			} catch (e) {
-				console.error(e);
+			console.error(e);
 			}
 		}
 	}
@@ -278,7 +288,26 @@ class KademliaNode extends AbstractNode {
 
 			switch (message.type) {
 				case MessageType.Store: {
-					await this.table.nodeStore<StoreData>(message.data.data?.key, message.data.data?.value);
+					const key = message.data.data?.key;
+					const value = message.data.data?.value;
+					
+					console.log(`Node ${this.nodeId} received STORE message:`, {
+						key,
+						valueType: typeof value,
+						valueLength: value?.length,
+						valuePreview: value?.substring(0, 50) + (value?.length > 50 ? '...' : '')
+					});
+					
+					// Ensure we're storing a string
+					if (typeof value === 'string') {
+						await this.table.nodeStore<StoreData>(key, value);
+					} else {
+						console.error(`Received non-string value in STORE message:`, value);
+						// Convert to string if possible
+						const stringValue = typeof value === 'object' ? JSON.stringify(value) : String(value);
+						await this.table.nodeStore<StoreData>(key, stringValue);
+					}
+					
 					await this.handleMessageResponse(MessageType.Pong, message, message.data?.data);
 					break;
 				}
@@ -594,10 +623,10 @@ class KademliaNode extends AbstractNode {
 		
 		// Check if we are a gateway for this blockchain
 		if (this.registeredGateways.has(blockchainId)) {
-		const localGateway = this.registeredGateways.get(blockchainId)!;
-		if (Date.now() - localGateway.timestamp < 3600000) { // 1 hour freshness
+			const localGateway = this.registeredGateways.get(blockchainId)!;
+			if (Date.now() - localGateway.timestamp < 3600000) { // 1 hour freshness
 			gateways.push(localGateway);
-		}
+			}
 		}
 		
 		// Search the network using existing findValue
@@ -605,15 +634,31 @@ class KademliaNode extends AbstractNode {
 		const result = await this.findValue(gatewayKey.toString());
 		
 		if (result && result.value) {
-		try {
-			const gatewayInfo = GatewayInfo.deserialize(result.value);
-			if (Date.now() - gatewayInfo.timestamp < 3600000 &&
+			try {
+			console.log(`Found raw value for gateway:${blockchainId}:`, {
+				type: typeof result.value,
+				length: result.value.length,
+				content: result.value.substring(0, 100) + (result.value.length > 100 ? '...' : ''),
+				startsWithBrace: result.value.startsWith('{'),
+				endsWithBrace: result.value.endsWith('}')
+			});
+			
+			// Validate that it looks like JSON before parsing
+			if (typeof result.value === 'string' && result.value.trim().startsWith('{')) {
+				const gatewayInfo = GatewayInfo.deserialize(result.value);
+				if (Date.now() - gatewayInfo.timestamp < 3600000 &&
 				!gateways.find(g => g.nodeId === gatewayInfo.nodeId)) {
-			gateways.push(gatewayInfo);
+				gateways.push(gatewayInfo);
+				}
+			} else {
+				console.error(`Invalid gateway data format for ${blockchainId}:`, result.value);
 			}
-		} catch (e) {
+			} catch (e) {
 			console.error('Error deserializing gateway info:', e);
-		}
+			console.error('Raw value that caused error:', result.value);
+			console.error('Value type:', typeof result.value);
+			console.error('Value length:', result.value?.length);
+			}
 		}
 		
 		// Query other nodes for more gateways
@@ -622,9 +667,9 @@ class KademliaNode extends AbstractNode {
 		
 		// Merge results, avoiding duplicates
 		for (const gateway of additionalGateways) {
-		if (!gateways.find(g => g.nodeId === gateway.nodeId)) {
+			if (!gateways.find(g => g.nodeId === gateway.nodeId)) {
 			gateways.push(gateway);
-		}
+			}
 		}
 		
 		console.log(`Found ${gateways.length} gateway(s) for ${blockchainId}`);

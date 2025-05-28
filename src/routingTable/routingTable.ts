@@ -171,6 +171,15 @@ class RoutingTable {
 
 	public nodeStore = <T extends MessagePayload<UDPDataInfo>>(key: string, value: string) => {
 		console.log(`RoutingTable storing key ${key}, value type: ${typeof value}, length: ${value?.length}`);
+		console.log(`RoutingTable storing value content: ${value?.substring(0, 100)}...`); // First 100 chars
+		
+		// Validate that the value is a string
+		if (typeof value !== 'string') {
+			console.error(`Expected string value but got ${typeof value}:`, value);
+			// Convert to string if needed
+			value = typeof value === 'object' ? JSON.stringify(value) : String(value);
+		}
+		
 		this.store.set(Number(key), value);
 	};
 
