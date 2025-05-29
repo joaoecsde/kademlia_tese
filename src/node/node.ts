@@ -479,10 +479,10 @@ class KademliaNode extends AbstractNode {
 			const actualValue = data && data.data && data.data.data ? data.data.data.value : null;
 			
 			if (actualValue && typeof actualValue === 'string') {
-				console.log(`✅ Resolved findValue with string value: ${actualValue.substring(0, 100)}...`);
+				console.log(`Resolved findValue with string value: ${actualValue.substring(0, 100)}...`);
 				resolve(actualValue);
 			} else {
-				console.log(`❌ FindValue returned non-string or null:`, typeof actualValue, actualValue);
+				console.log(`FindValue returned non-string or null:`, typeof actualValue, actualValue);
 				resolve(null);
 			}
 		});
@@ -977,7 +977,7 @@ class KademliaNode extends AbstractNode {
 		try {
 			const singleGateway = GatewayInfo.deserialize(data);
 			gateways.push(singleGateway);
-			console.log(`✅ Parsed single gateway: ${singleGateway.blockchainId} (node ${singleGateway.nodeId})`);
+			console.log(`Parsed single gateway: ${singleGateway.blockchainId} (node ${singleGateway.nodeId})`);
 			return gateways;
 		} catch (singleError) {
 			console.log(`Single JSON parse failed: ${singleError.message}`);
@@ -1011,9 +1011,9 @@ class KademliaNode extends AbstractNode {
 				try {
 					const gateway = GatewayInfo.deserialize(jsonStr);
 					gateways.push(gateway);
-					console.log(`✅ Parsed concatenated gateway ${i}: ${gateway.blockchainId} (node ${gateway.nodeId})`);
+					console.log(`Parsed concatenated gateway ${i}: ${gateway.blockchainId} (node ${gateway.nodeId})`);
 				} catch (parseError) {
-					console.log(`❌ Failed to parse JSON part ${i}: ${parseError.message}`);
+					console.log(`Failed to parse JSON part ${i}: ${parseError.message}`);
 					console.log(`Problematic JSON: ${jsonStr.substring(0, 100)}`);
 				}
 			}
