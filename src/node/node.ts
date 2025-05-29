@@ -683,10 +683,10 @@ class KademliaNode extends AbstractNode {
 		// 1. Check local registered gateways
 		if (this.registeredGateways.has(blockchainId)) {
 			const localGateway = this.registeredGateways.get(blockchainId)!;
-			console.log(`✅ Found in local registered gateways`);
+			console.log(`Found in local registered gateways`);
 			gateways.push(localGateway);
 		} else {
-			console.log(`❌ Not found in local registered gateways`);
+			console.log(`Not found in local registered gateways`);
 		}
 		
 		// 2. Check local storage directly using the numeric key
@@ -704,18 +704,18 @@ class KademliaNode extends AbstractNode {
 			if (typeof localValue === 'string') {
 				try {
 					const gateway = GatewayInfo.deserialize(localValue);
-					console.log(`✅ Successfully parsed local gateway: ${gateway.blockchainId} (node ${gateway.nodeId})`);
+					console.log(`Successfully parsed local gateway: ${gateway.blockchainId} (node ${gateway.nodeId})`);
 					
 					if (gateway.blockchainId === blockchainId && 
 						!gateways.find(g => g.nodeId === gateway.nodeId)) {
 						gateways.push(gateway);
 					}
 				} catch (parseError) {
-					console.error(`❌ Failed to parse local storage value:`, parseError.message);
+					console.error(`Failed to parse local storage value:`, parseError.message);
 				}
 			}
 		} catch (storageError) {
-			console.error(`❌ Error accessing local storage:`, storageError);
+			console.error(`Error accessing local storage:`, storageError);
 		}
 		
 		// 3. Check network using DIRECT KEY LOOKUP (not findValue which hashes again)
@@ -730,22 +730,22 @@ class KademliaNode extends AbstractNode {
 				try {
 					const result = await this.sendSingleFindValue(node, gatewayKey);
 					if (result && typeof result === 'string') {
-						console.log(`✅ Found gateway data from node ${node.nodeId}`);
+						console.log(`Found gateway data from node ${node.nodeId}`);
 						
 						const gateway = GatewayInfo.deserialize(result);
 						if (gateway.blockchainId === blockchainId && 
 							!gateways.find(g => g.nodeId === gateway.nodeId)) {
 							gateways.push(gateway);
-							console.log(`✅ Added gateway from network: ${gateway.blockchainId} (node ${gateway.nodeId})`);
+							console.log(`Added gateway from network: ${gateway.blockchainId} (node ${gateway.nodeId})`);
 						}
 						break; // Found what we needed
 					}
 				} catch (error) {
-					console.log(`❌ Error querying node ${node.nodeId}:`, error.message);
+					console.log(`Error querying node ${node.nodeId}:`, error.message);
 				}
 			}
 		} catch (networkError) {
-			console.error(`❌ Network search error:`, networkError);
+			console.error(`Network search error:`, networkError);
 		}
 		
 		console.log(`\n=== Final result: ${gateways.length} gateway(s) for ${blockchainId} ===`);
