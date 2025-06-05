@@ -131,37 +131,8 @@ class BaseController {
 			next(error);
 		}
 	};
-	
-	public registerGateway = async (req: Request, res: Response, next: NextFunction) => {
-		try {
-			const { blockchainId, endpoint, protocols } = req.body;
-			
-			if (!blockchainId || !endpoint) {
-			return res.status(400).json({ 
-				error: 'blockchainId and endpoint are required' 
-			});
-			}
-			
-			const gatewayInfo = await this.node.registerAsGateway(
-			blockchainId,
-			endpoint,
-			protocols || ['SATP']
-			);
-			
-			// Start heartbeat
-			this.node.startGatewayHeartbeat(blockchainId, endpoint);
-			
-			return res.json({
-			success: true,
-			gateway: gatewayInfo,
-			message: `Node ${this.node.nodeId} registered as gateway for ${blockchainId}`
-			});
-		} catch (error) {
-			next(error);
-		}
-		};
 
-		public findGateways = async (req: Request, res: Response, next: NextFunction) => {
+	public findGateways = async (req: Request, res: Response, next: NextFunction) => {
 		try {
 			const { blockchainId } = req.params;
 			
@@ -200,30 +171,32 @@ class BaseController {
 	*/
 	public storeGateway = async (req: Request, res: Response, next: NextFunction) => {
 		try {
-			const { blockchainId, nodeId, endpoint, supportedProtocols = ['SATP'] } = req.body;
+			const { blockchainId, endpoint, supportedProtocols = ['SATP'] } = req.body;
+			// Remove nodeId from required fields - we'll use the Kademlia node's own ID
 			
 			// Validate required fields
-			if (!blockchainId || !nodeId || !endpoint) {
+			if (!blockchainId || !endpoint) {
 				return res.status(400).json({
-					error: 'Missing required fields: blockchainId, nodeId, and endpoint are required'
+					error: 'Missing required fields: blockchainId and endpoint are required'
 				});
 			}
 			
-			// Create gateway info object
+			// Use the actual Kademlia node ID instead of an arbitrary one
+			const actualNodeId = this.node.nodeId;
+			
+			// Create gateway info object using the Kademlia node's ID
 			const gatewayInfo = new GatewayInfo(
 				blockchainId,
-				parseInt(nodeId),
+				actualNodeId, // Use the actual Kademlia node ID
 				endpoint,
 				Array.isArray(supportedProtocols) ? supportedProtocols : [supportedProtocols]
 			);
 			
 			// Use unique keys to prevent mixing blockchains
-			// Primary key: for finding all gateways of this blockchain
 			const gatewayKey = hashKeyAndmapToKeyspace(`gw-${blockchainId}`);
-			// Specific key: for this exact gateway instance
-			const specificKey = hashKeyAndmapToKeyspace(`gw-${blockchainId}-${nodeId}`);
+			const specificKey = hashKeyAndmapToKeyspace(`gw-${blockchainId}-${actualNodeId}`);
 			
-			console.log(`Manually storing gateway for ${blockchainId}, nodeId: ${nodeId}`);
+			console.log(`Node ${actualNodeId} storing gateway for ${blockchainId}`);
 			console.log(`Storage keys - Primary: ${gatewayKey}, Specific: ${specificKey}`);
 			
 			// Store using both keys
@@ -246,6 +219,11 @@ class BaseController {
 						gatewayKey,
 						specificKey
 					}
+				},
+				nodeInfo: {
+					kademliaNodeId: actualNodeId,
+					httpPort: this.node.port - 1000,
+					udpPort: this.node.port
 				}
 			});
 			
@@ -255,6 +233,7 @@ class BaseController {
 		}
 	};
 
+
 	/**
 	 * GET /storeGateway/:blockchainId/:nodeId/:endpoint
 	 * Store gateway information via URL parameters (simpler for testing)
@@ -263,10 +242,9 @@ class BaseController {
 	 */
 	public storeGatewaySimple = async (req: Request, res: Response, next: NextFunction) => {
 		try {
-			const { blockchainId, nodeId, endpoint } = req.params;
+			const { blockchainId, endpoint } = req.params;
 			const { protocols } = req.query;
 			
-			// Parse protocols from query parameter
 			let supportedProtocols = ['SATP']; // default
 			if (protocols) {
 				supportedProtocols = typeof protocols === 'string' 
@@ -276,24 +254,25 @@ class BaseController {
 						: ['SATP'];
 			}
 			
-			// Decode URL-encoded endpoint
 			const decodedEndpoint = decodeURIComponent(endpoint);
 			
-			// Create gateway info object
+			const actualNodeId = this.node.nodeId;
+			
+			// Create gateway info object using the Kademlia node's ID
 			const gatewayInfo = new GatewayInfo(
 				blockchainId,
-				parseInt(nodeId),
+				actualNodeId, 
 				decodedEndpoint,
 				supportedProtocols
 			);
 			
 			// Use unique keys to prevent mixing blockchains
 			const gatewayKey = hashKeyAndmapToKeyspace(`gw-${blockchainId}`);
-			const specificKey = hashKeyAndmapToKeyspace(`gw-${blockchainId}-${nodeId}`);
+			const specificKey = hashKeyAndmapToKeyspace(`gw-${blockchainId}-${actualNodeId}`);
 			
-			console.log(`Manually storing gateway via URL params:`);
+			console.log(`Node ${actualNodeId} storing gateway via URL params:`);
 			console.log(`- Blockchain: ${blockchainId}`);
-			console.log(`- Node ID: ${nodeId}`);
+			console.log(`- Kademlia Node ID: ${actualNodeId} (auto-detected)`);
 			console.log(`- Endpoint: ${decodedEndpoint}`);
 			console.log(`- Protocols: ${supportedProtocols.join(', ')}`);
 			console.log(`- Keys: Primary=${gatewayKey}, Specific=${specificKey}`);
@@ -312,7 +291,7 @@ class BaseController {
 				message: `Gateway for ${blockchainId} stored successfully`,
 				gateway: {
 					blockchainId,
-					nodeId: parseInt(nodeId),
+					nodeId: actualNodeId, 
 					endpoint: decodedEndpoint,
 					supportedProtocols,
 					timestamp: gatewayInfo.timestamp
@@ -325,6 +304,12 @@ class BaseController {
 						gatewayKey,
 						specificKey
 					}
+				},
+				nodeInfo: {
+					kademliaNodeId: actualNodeId,
+					httpPort: this.node.port - 1000,
+					udpPort: this.node.port,
+					explanation: "nodeId now represents the actual Kademlia node providing this gateway"
 				},
 				usage: {
 					findEndpoint: `/findGateways/${blockchainId}`,

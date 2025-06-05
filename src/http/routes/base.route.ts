@@ -28,11 +28,10 @@ class BaseRoute implements Routes {
 		this.router.get(`${this.path}getPeers`, this.baseController.getNodePeers);
 		this.router.get(`${this.path}debugClosestNodes/:value`, this.baseController.debugClosestNodes);
 
-		this.router.post(`${this.path}registerGateway`, this.baseController.registerGateway);
-  		this.router.get(`${this.path}findGateways/:blockchainId`, this.baseController.findGateways);
+  		this.router.get(`${this.path}findGateway/:blockchainId`, this.baseController.findGateways);
 
 		this.router.post(`${this.path}storeGateway`, this.baseController.storeGateway);
-		this.router.get(`${this.path}storeGateway/:blockchainId/:nodeId/:endpoint`, this.baseController.storeGatewaySimple);
+		this.router.get(`${this.path}storeGateway/:blockchainId/:endpoint`, this.baseController.storeGatewaySimple);
 
 		this.router.get(`${this.path}debugStorage/:key`, this.baseController.debugStorage);
 	}
