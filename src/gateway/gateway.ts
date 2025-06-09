@@ -4,7 +4,6 @@ export interface IGatewayInfo {
   endpoint: string;
   supportedProtocols: string[];
   timestamp: number;
-  version: number;
 }
 
 export class GatewayInfo implements IGatewayInfo {
@@ -13,20 +12,18 @@ export class GatewayInfo implements IGatewayInfo {
   endpoint: string;
   supportedProtocols: string[];
   timestamp: number;
-  version: number;
 
   constructor(
     blockchainId: string,
     nodeId: number,
     endpoint: string,
-    supportedProtocols: string[] = ['SATP']
+    supportedProtocols: string[] = []
   ) {
     this.blockchainId = blockchainId;
     this.nodeId = nodeId;
     this.endpoint = endpoint;
     this.supportedProtocols = supportedProtocols;
     this.timestamp = Date.now();
-    this.version = 1;
   }
 
   serialize(): string {
@@ -42,7 +39,6 @@ export class GatewayInfo implements IGatewayInfo {
       parsed.supportedProtocols
     );
     gateway.timestamp = parsed.timestamp;
-    gateway.version = parsed.version;
     return gateway;
   }
 }

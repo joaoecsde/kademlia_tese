@@ -293,13 +293,10 @@ class BaseController {
 					blockchainId,
 					nodeId: actualNodeId, 
 					endpoint: decodedEndpoint,
-					supportedProtocols,
+					//supportedProtocols,
 					timestamp: gatewayInfo.timestamp
 				},
 				storage: {
-					successful,
-					failed,
-					totalAttempts: 2,
 					keys: {
 						gatewayKey,
 						specificKey
@@ -309,7 +306,6 @@ class BaseController {
 					kademliaNodeId: actualNodeId,
 					httpPort: this.node.port - 1000,
 					udpPort: this.node.port,
-					explanation: "nodeId now represents the actual Kademlia node providing this gateway"
 				},
 				usage: {
 					findEndpoint: `/findGateways/${blockchainId}`,
