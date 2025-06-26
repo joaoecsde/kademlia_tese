@@ -44,6 +44,9 @@ export enum MessageType {
 	Ping = "PING",
 	Pong = "PONG",
 	Close = "CLOSE",
+	RegisterGateway = "REGISTER_GATEWAY",
+  	FindGateway = "FIND_GATEWAY",
+  	GatewayResponse = "GATEWAY_RESPONSE",
 }
 
 export enum PacketType {

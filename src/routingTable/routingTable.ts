@@ -118,7 +118,7 @@ class RoutingTable {
 		};
 
 		while (true) {
-			if (closestNodes.length === count || (!canIterateBelow() && !canIterateAbove())) {
+			if (closestNodes.length >= count || (!canIterateBelow() && !canIterateAbove())) {
 				break;
 			}
 
@@ -141,8 +141,8 @@ class RoutingTable {
 			}
 		}
 
-		closestNodes.sort((a, b) => b.distance - a.distance).slice(0, count);
-		return closestNodes.map((c) => c.node);
+		closestNodes.sort((a, b) => a.distance - b.distance);
+		return closestNodes.slice(0, count).map((c) => c.node);
 	}
 
 	private addNodes(key: number, bucketIndex: number, closestNodes: CloseNodes[]) {
@@ -170,6 +170,16 @@ class RoutingTable {
 	};
 
 	public nodeStore = <T extends MessagePayload<UDPDataInfo>>(key: string, value: string) => {
+		console.log(`RoutingTable storing key ${key}, value type: ${typeof value}, length: ${value?.length}`);
+		console.log(`RoutingTable storing value content: ${value?.substring(0, 100)}...`); // First 100 chars
+		
+		// Validate that the value is a string
+		if (typeof value !== 'string') {
+			console.error(`Expected string value but got ${typeof value}:`, value);
+			// Convert to string if needed
+			value = typeof value === 'object' ? JSON.stringify(value) : String(value);
+		}
+		
 		this.store.set(Number(key), value);
 	};
 

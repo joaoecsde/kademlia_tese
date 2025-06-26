@@ -32,6 +32,7 @@ export class DiscoveryScheduler {
 
 	public stopCronJob = (): void => {
 		this.cronJob.stop();
+		this.cronJob = undefined;
 	};
 
 	public startCronJob = (): void => {

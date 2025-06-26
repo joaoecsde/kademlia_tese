@@ -1,95 +1,6 @@
-# Kademlia DHT Implementation
+# Kademlia DHT Gateway System
 
-This repository contains an implementation of the Kademlia Distributed Hash Table (DHT), a foundational component in many peer-to-peer (P2P) systems like BitTorrent, IPFS, and others. Kademlia provides a way for nodes in a distributed network to efficiently locate resources without the need for centralized servers.
-
-## Table of Contents
-
-- [Overview](#overview)
-- [What is Kademlia?](#what-is-kademlia)
-- [Key Components](#key-components)
-  - [Routing Table](#routing-table)
-  - [Buckets](#buckets)
-  - [Node ID & XOR Metric](#node-id--xor-metric)
-  - [Recursive Peer Discovery Algorithm](#recursive-peer-discovery-algorithm)
-- [Protocol Overview](#protocol-overview)
-- [How This Implementation Works](#how-this-implementation-works)
-- [Installation & Usage](#installation--usage)
-- [Contributing](#contributing)
-- [License](#license)
-
-## Overview
-
-The Kademlia DHT (Distributed Hash Table) is a decentralized system that allows nodes (peers) in a network to store and retrieve values associated with keys, without the need for a central authority. It uses a unique combination of peer-to-peer networking and a binary tree-like structure to ensure that any node can find other nodes and locate resources efficiently, even as nodes join or leave the network.
-
-This repository provides a full implementation of the Kademlia protocol, including:
-
-- **Routing Table managemen**t with efficient lookup mechanisms
-- **Bucket-based storage** and peer discovery
-- **Recursive lookup algorithm** for locating peers or values
-
-## What is Kademlia?
-
-Kademlia is a protocol designed for decentralized networks that organizes nodes using a unique, node-specific ID. These IDs are used to route requests across the network and find specific nodes and resources. Kademlia uses XOR distance as its metric for determining how close two nodes are to each other in the network.
-
-The Kademlia DHT is highly resilient and scalable, making it suitable for large, dynamic P2P networks. Kademlia provides efficient:
-
-- **Key-Value Lookups**: Any node can store and retrieve key-value pairs, distributed across the network.
-- **Peer Discovery**: Nodes can find other peers by their node ID through recursive lookups.
-- **Fault Tolerance**: The structure of Kademlia ensures robustness in the presence of network churn (nodes joining or leaving).
-
-## Key Components
-
-### Routing Table
-
-Each node in a Kademlia network maintains a routing table that holds the IDs and addresses of other nodes. The routing table is broken into "buckets," which are lists of nodes grouped by how far away they are (in terms of XOR distance) from the local node.
-
-- **Bucket Structure**: Nodes in the routing table are organized into buckets based on their XOR distance from the local node.
-- **Routing Efficiency**: The routing table ensures that nodes maintain connections with both close and distant peers, balancing efficiency with network coverage.
-
-### Buckets
-
-Kademlia uses buckets to group nodes with similar XOR distances to the local node.
-
-- **Number of Buckets**: Determined by the length of the node ID. For a 160-bit ID (e.g., SHA-1 hashed IDs), each node will have 160 buckets. However for this implementation the base code uses 16 BIT NodeIds so we have 4 buckets. This is simple just for ease of testing when it comes to manually verifying the nodes's buvkets contain the correct peers
-- **Bucket Size**: Each bucket can store a fixed number of nodes (typically `k = 20`), however in my implementation our bucket size is 4. When a bucket is full, Kademlia uses a least-recently-seen strategy to evict inactive nodes. **However my implementation currently hasn't implemented this part of the algorithm ye, but its coming soon**
-
-### Node ID & XOR Metric
-
-Each node in Kademlia is assigned a Node ID, typically a randomly generated value of fixed bit-length.
-
-- **XOR Metric**: The distance between two node IDs is calculated using the XOR operation. The result is interpreted as a binary number representing the "distance" between the two nodes.
-- **Closeness**: The lower the XOR value between two nodes, the closer they are considered in the network.
-
-### Recursive Peer Discovery Algorithm
-
-Kademlia's recursive peer discovery mechanism allows nodes to efficiently locate other nodes or resources.
-
-1. **Lookup Initiation**: The node queries the closest known nodes to the target key/node.
-2. **Closest Nodes Query**: These queried nodes respond with a list of the closest nodes they know of.
-3. **Iterative Process**: The requesting node updates its view of the network and repeats the process, converging on the closest node.
-4. **Termination**: The process ends when the node finds the target or determines it's unreachable.
-
-This process ensures logarithmic lookup time relative to the network size.
-
-## Protocol Overview
-
-The Kademlia protocol uses several message types for node interaction:
-
-- **PING**: Check if a node is online and responsive.
-- **STORE**: Instruct a node to store a key-value pair.
-- **FIND_NODE**: Locate a node by its ID. Returns the k closest nodes.
-- **FIND_VALUE**: Retrieve a key-value pair. If unavailable, returns the closest nodes to the key.
-- **REPLY**: Response message to the above queries, containing the requested data or closer nodes.
-
-## How This Implementation Works
-
-This implementation includes the following features:
-
-- **Routing Table Management**: Nodes maintain routing tables, organized into buckets based on XOR distance.
-- **Bucket Management**: Buckets in this implementation are capped at 4 and for we use a 16 BIT keyspace.
-- **Recursive Peer Lookup**: The recursive lookup mechanism allows efficient location of nodes and resources **(although their currently is a small bug for middle nodes in the keyspace name;y 3006 & 3007 where the last bucket contains the wrong nodes)**.
-- **Storage and Retrieval**: Nodes store and retrieve key-value pairs, distributing data across the network using XOR distance.
-- **TCP transport for brodcasting and direct messages**: I plan to implement a distributed ledgeer to this project at some point so i have set up TCP woth websockets for general message sharing
+A distributed hash table implementation using the Kademlia protocol with enhanced gateway functionality for blockchain interoperability.
 
 ## Usage
 to use this and run the keygen process yourself. first clone the repo run 
@@ -108,38 +19,172 @@ pnpm run start:dev // to run 16 nodes concurrently (dev script)
 ```
 You can then observe the peer doscvery process and begin to interact with each nodes HTTP API for getting node information and sending messages
 
-### Other methods
-note when using something like post man to call these GET endpoints. the http server is always deployed at port 2000 + nodeiD. To see all available HTTPS methods see `src/http/router/routes.ts`
+## Port Configuration
+
+**Important**: The HTTP server is always deployed at `port 2000 + nodeId`
+
+| Node ID | UDP Port | HTTP Port |
+|---------|----------|-----------|
+| 1       | 3001     | 2001      |
+| 2       | 3002     | 2002      |
+| 3       | 3003     | 2003      |
+| 4       | 3004     | 2004      |
+| 5       | 3005     | 2005      |
+
+For all available HTTP methods, see `src/http/controller/basecontroller.ts`
+
+## API Endpoints
+
+### Basic Node Operations
+
+**Health Check**
 ```bash
-GET- http://localhost:2001/getBucketNodes
+GET http://localhost:2001/ping
 ```
-returns a nodes buckets and all of the peers stored in each
+
+**Node Status** 
 ```bash
-GET- http://localhost:3001/store/value
+GET http://localhost:2001/status
 ```
-stores a value on a given node
+
+**Get Node Buckets**
+Returns a node's buckets and all peers stored in each
 ```bash
-GET- http://localhost:2001/findValue/value
+GET http://localhost:2001/getBucketNodes
 ```
-returns a previously stored value in he DHT
+
+**Get All Peers**
+Returns all known peers
+```bash
+GET http://localhost:2001/getPeers
+```
+
+### DHT Operations
+
+**Store Value**
+Stores a value on a given node
+```bash
+GET http://localhost:2001/store/value
+```
+
+**Find Value**
+Returns a previously stored value in the DHT
+```bash
+GET http://localhost:2001/findValue/value
+```
+
+**Find Closest Node**
+Finds the closest node to a given ID
+```bash
+GET http://localhost:2001/findClosestNode/id
+```
+
+**Debug Closest Nodes**
+To know where your value will be stored
+```bash
+GET http://localhost:2001/debugClosestNodes/value
+```
+
+**Debug Storage**
+Debug storage for specific key
+```bash
+GET http://localhost:2001/debugStorage/key
+```
+
+### Gateway Operations
+
+#### Gateway Registration
+
+**Store Gateway (POST Method - Recommended)**
+```bash
+curl -X POST http://localhost:2001/storeGateway \
+  -H "Content-Type: application/json" \
+  -d '{
+    "blockchainId": "hardhat1",
+    "endpoint": "http://localhost:8545",
+    "supportedProtocols": ["SATP", "ILP"]
+  }'
+```
+
+**Store Gateway (GET Method - Simple)**
+```bash
+GET http://localhost:2001/storeGateway/hardhat1/http%3A%2F%2Flocalhost%3A8545
+
+# With custom protocols
+GET http://localhost:2001/storeGateway/hardhat1/http%3A%2F%2Flocalhost%3A8545?protocols=SATP,ILP
+```
+
+#### Gateway Discovery
+
+**Find Gateways**
+```bash
+GET http://localhost:2002/findGateway/hardhat1
+
+# Include unhealthy gateways
+GET http://localhost:2002/findGateway/hardhat1?includeUnhealthy=true
+
+# Filter by age (only gateways less than 30 minutes old)
+GET http://localhost:2002/findGateway/hardhat1?maxAge=30
+
+# Combine filters
+GET http://localhost:2002/findGateway/hardhat1?includeUnhealthy=false&maxAge=60
+```
+
+#### Gateway Management
+
+**List All Gateways**
+List all gateways registered on this specific node
+```bash
+GET http://localhost:2001/gateways
+```
+
+**Gateway Health Check**
+Check health of all gateways for a specific blockchain
+```bash
+GET http://localhost:2001/gateway/hardhat1/health
+```
+
+## Common Usage Examples
+
+### Quick Gateway Test
 
 ```bash
-GET- http://localhost:2001/getNodeMessages
+# 1. Store a gateway on node 1
+curl -X POST http://localhost:2001/storeGateway \
+  -H "Content-Type: application/json" \
+  -d '{"blockchainId": "hardhat1", "endpoint": "http://localhost:8545"}'
+
+# 2. Find gateway from node 2 (tests DHT distribution)
+curl "http://localhost:2002/findGateway/hardhat1?includeUnhealthy=true"
+
+# 3. Check gateway health
+curl "http://localhost:2001/gateway/hardhat1/health"
+
+# 4. List all gateways on node 1
+curl "http://localhost:2001/gateways"
 ```
-returns all TCP (Websocket) messages that a node has recieved
+
+### Multiple Blockchain Gateways
 
 ```bash
-GET- http://localhost:2001/getNodeUdpMessages
+# Store different blockchain gateways
+curl -X POST http://localhost:2001/storeGateway -H "Content-Type: application/json" \
+  -d '{"blockchainId": "ethereum", "endpoint": "https://mainnet.infura.io/v3/your-key"}'
+
+curl -X POST http://localhost:2002/storeGateway -H "Content-Type: application/json" \
+  -d '{"blockchainId": "polygon", "endpoint": "https://polygon-rpc.com"}'
+
+curl -X POST http://localhost:2003/storeGateway -H "Content-Type: application/json" \
+  -d '{"blockchainId": "avalanche", "endpoint": "https://api.avax.network/ext/bc/C/rpc"}'
+
+# Find any gateway from any node
+curl "http://localhost:2001/findGateway/ethereum"
+curl "http://localhost:2004/findGateway/polygon"
+curl "http://localhost:2005/findGateway/avalanche"
 ```
-returns all UDP node discovery messages that a node has recieved
+
+## To run tests you do
 
 ```bash
-POST- http://localhost:2001/postDirectMessage
+npx jest --config jest.config.js src/test/NameOfTheTest
 ```
-send a direct message to a node
-
-```bash
-GET- http://localhost:2001/postBroadcast?type=BROADCAST
-```
-send a message to all peers of a given node. the message will propagate throughout the entire network when every node does this.
-
