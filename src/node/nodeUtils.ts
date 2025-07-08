@@ -39,7 +39,7 @@ export class NodeUtils {
 		return {
 			id: v4(),
 			ttl: ttl,
-			type: type === MessageType.Braodcast ? PacketType.Broadcast : PacketType.Direct,
+			type: type === MessageType.Broadcast ? PacketType.Broadcast : PacketType.Direct,
 			message,
 			destination: message.to,
 			origin: message.from,

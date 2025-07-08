@@ -39,7 +39,7 @@ class WebSocketTransport extends AbstractTransport<Server, BaseMessageType> {
 
 	public setupListeners = (): void => {
 		this.messages = {
-			[MessageType.Braodcast]: new Map<string, any>(),
+			[MessageType.Broadcast]: new Map<string, any>(),
 			[MessageType.DirectMessage]: new Map<string, any>(),
 		};
 

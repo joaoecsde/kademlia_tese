@@ -31,7 +31,7 @@ class BaseController {
 				message: `received direct message from node ${this.node.port}`,
 				to: Number(req.body.id),
 			};
-			this.node.sendTcpTransportMessage<DirectData>(MessageType.Braodcast, payload);
+			this.node.sendTcpTransportMessage<DirectData>(MessageType.Broadcast, payload);
 			res.send("success");
 		} catch (error) {
 			next(error);
@@ -45,7 +45,7 @@ class BaseController {
 				message: `received broadcast message from node ${this.node.port}`,
 				peers: [],
 			};
-			this.node.sendTcpTransportMessage<BroadcastData>(MessageType.Braodcast, payload);
+			this.node.sendTcpTransportMessage<BroadcastData>(MessageType.Broadcast, payload);
 			res.send("success");
 		} catch (error) {
 			next(error);
