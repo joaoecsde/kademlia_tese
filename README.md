@@ -184,7 +184,11 @@ curl "http://localhost:2005/findGateway/avalanche"
 ```
 
 ## To run tests you do
-
 ```bash
 npx jest --config jest.config.js src/test/NameOfTheTest
+```
+
+For the gateway tests you will need to start a hardhat gateway, to do this do:
+```bash
+cd EVM && npx hardhat node --hostname 0.0.0.0 --port 8545
 ```
