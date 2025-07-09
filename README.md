@@ -1,6 +1,6 @@
 # Kademlia DHT Gateway System
 
-A distributed hash table implementation using the Kademlia protocol with enhanced gateway functionality for blockchain interoperability and **end-to-end encryption**.
+A distributed hash table implementation using the Kademlia protocol with enhanced gateway functionality for blockchain interoperability.
 
 ## Security Features
 
