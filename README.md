@@ -45,7 +45,7 @@ You can then observe the peer discovery process and begin to interact with each 
 | 4       | 3004     | 2004      |
 | 5       | 3005     | 2005      |
 
-For all available HTTP methods, see `src/http/controller/basecontroller.ts`
+For all available HTTP methods, see `src/http/routes/base.route.ts`
 
 ## API Endpoints
 
