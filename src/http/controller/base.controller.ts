@@ -589,6 +589,686 @@ class BaseController {
 			next(error);
 		}
 	};
+
+	public getPublicKey = async (req: Request, res: Response, next: NextFunction) => {
+		try {
+		return res.json({
+			nodeId: this.node.nodeId,
+			publicKey: this.node.getCryptoManager().getPublicKey(),
+			fingerprint: this.node.getPublicKeyFingerprint(),
+			timestamp: Date.now()
+		});
+		} catch (error) {
+		next(error);
+		}
+  };
+
+  public getKnownKeys = async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const knownKeys = this.node.getKnownPublicKeys();
+      return res.json({
+        nodeId: this.node.nodeId,
+        totalKeys: knownKeys.length,
+        keys: knownKeys,
+        timestamp: Date.now()
+      });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  public getCryptoStats = async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const stats = this.node.getCryptoStats();
+      return res.json({
+        nodeId: this.node.nodeId,
+        ...stats,
+        timestamp: Date.now()
+      });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  public setEncryption = async (req: Request, res: Response, next: NextFunction) => {
+	try {
+		const { enabled } = req.params; // true/false from URL
+		
+		if (enabled !== 'true' && enabled !== 'false') {
+		return res.status(400).json({
+			success: false,
+			error: 'enabled must be "true" or "false"',
+			example: 'Use: /crypto/encryption/true or /crypto/encryption/false'
+		});
+		}
+
+		const enabledBool = enabled === 'true';
+		this.node.setEncryptionEnabled(enabledBool);
+		
+		return res.json({
+		success: true,
+		message: `Encryption ${enabledBool ? 'enabled' : 'disabled'}`,
+		encryptionEnabled: enabledBool,
+		nodeId: this.node.nodeId,
+		timestamp: Date.now()
+		});
+	} catch (error) {
+		next(error);
+	}
+  };
+
+  public discoverKeys = async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const allPeers = this.node.table.getAllPeers();
+      const peerNodes = allPeers.map(peer => ({
+        nodeId: peer.nodeId,
+        address: peer.address,
+        port: peer.port
+      }));
+
+      await this.node.getKeyDiscoveryManager().discoverKeys(peerNodes);
+      
+      const discoveredKeys = this.node.getKnownPublicKeys();
+      
+      return res.json({
+        success: true,
+        message: `Key discovery completed`,
+        totalPeers: peerNodes.length,
+        discoveredKeys: discoveredKeys.length,
+        keys: discoveredKeys,
+        timestamp: Date.now()
+      });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  public exportKeys = async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const backup = this.node.exportKeys();
+      
+      return res.json({
+        success: true,
+        nodeId: this.node.nodeId,
+        backup,
+        message: 'Keys exported successfully',
+        timestamp: Date.now()
+      });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  public importKeys = async (req: Request, res: Response, next: NextFunction) => {
+	try {
+		// For testing, we'll create a simple test key import
+		// In production, you'd want this as POST with proper validation
+		
+		return res.json({
+		message: 'Key import endpoint available',
+		note: 'For security, use POST method with proper backup data',
+		example: 'POST /crypto/import with backup data in body',
+		currentKeys: this.node.getKnownPublicKeys().length,
+		timestamp: Date.now()
+		});
+	} catch (error) {
+		next(error);
+	}
+  };
+
+  // === SECURE DHT OPERATIONS ===
+
+  public secureStore = async (req: Request, res: Response, next: NextFunction) => {
+	try {
+		const { value } = req.params; // Only value, no key parameter
+		
+		if (!value) {
+		return res.status(400).json({
+			success: false,
+			error: 'value is required',
+			example: 'Use: /secure/store/mySecretData (not /secure/store/key/value)'
+		});
+		}
+
+		const decodedValue = decodeURIComponent(value);
+		
+		// Generate key the same way as regular store (hash the value)
+		const key = hashKeyAndmapToKeyspace(decodedValue);
+		
+		console.log(`Secure store: "${decodedValue}" -> key ${key}`);
+		
+		const results = await this.node.secureStore(key, decodedValue);
+		const successful = results.filter(r => r.status === 'fulfilled').length;
+		
+		return res.json({
+		success: true,
+		message: `Secure store completed on ${successful} nodes`,
+		value: decodedValue,
+		generatedKey: key,
+		encrypted: this.node.isEncryptionEnabled(),
+		results: successful,
+		nodeId: this.node.nodeId,
+		howToFind: `Use: /findValue/${encodeURIComponent(decodedValue)}`,
+		timestamp: Date.now()
+		});
+	} catch (error) {
+		next(error);
+	}
+  };
+
+  public securePing = async (req: Request, res: Response, next: NextFunction) => {
+		try {
+		const { nodeId, port } = req.params;
+		const address = req.query.address || '127.0.0.1'; // Default to localhost
+		
+		if (!nodeId || !port) {
+		return res.status(400).json({
+			success: false,
+			error: 'nodeId and port are required',
+			example: 'Use: /secure/ping/1/3001 or /secure/ping/1/3001?address=192.168.1.100'
+		});
+		}
+
+		const result = await this.node.securePing(Number(nodeId), String(address), Number(port));
+		
+		return res.json({
+		success: result,
+		message: result ? 'Secure ping successful' : 'Secure ping failed',
+		target: { 
+			nodeId: Number(nodeId), 
+			address: String(address), 
+			port: Number(port) 
+		},
+		encryptionEnabled: this.node.isEncryptionEnabled(),
+		timestamp: Date.now()
+		});
+	} catch (error) {
+		next(error);
+	}
+  };
+
+  // === TESTING ENDPOINTS ===
+
+  public testEncryption = async (req: Request, res: Response, next: NextFunction) => {
+    try {
+    const { targetNodeId, testData = "Hello, encrypted world!" } = req.body;
+    
+    if (!targetNodeId) {
+      return res.status(400).json({
+        success: false,
+        error: 'targetNodeId is required'
+      });
+    }
+
+    // First check if we have the key
+    const targetKey = this.node.getCryptoManager().getStoredPublicKey(Number(targetNodeId));
+    
+    if (!targetKey) {
+      // Try to get the key first
+      const allPeers = this.node.table.getAllPeers();
+      const targetPeer = allPeers.find(p => p.nodeId === Number(targetNodeId));
+      
+      if (!targetPeer) {
+        return res.status(404).json({
+          success: false,
+          error: `Node ${targetNodeId} not found in routing table`,
+          availableNodes: allPeers.map(p => p.nodeId),
+          suggestion: 'Try pinging the node first or trigger key discovery'
+        });
+      }
+
+      // Try to discover the key
+      try {
+        await this.node.requestPeerKey(Number(targetNodeId));
+        
+        // Check again after discovery attempt
+        const keyAfterDiscovery = this.node.getCryptoManager().getStoredPublicKey(Number(targetNodeId));
+        if (!keyAfterDiscovery) {
+          return res.status(400).json({
+            success: false,
+            error: `No public key found for node ${targetNodeId}. Key discovery failed.`,
+            suggestion: 'Try: curl -X POST http://localhost:' + (this.node.nodeId + 2000) + '/crypto/discover',
+            availableKeys: this.node.getKnownPublicKeys().map(k => k.nodeId)
+          });
+        }
+      } catch (discoveryError) {
+        return res.status(400).json({
+          success: false,
+          error: `Failed to discover key for node ${targetNodeId}: ${discoveryError.message}`,
+          suggestion: 'Try manual key discovery or check if the target node is online'
+        });
+      }
+    }
+
+    // Now try encryption test
+    try {
+      const finalKey = this.node.getCryptoManager().getStoredPublicKey(Number(targetNodeId));
+      const encrypted = this.node.getCryptoManager().encrypt(testData, finalKey);
+      const signature = this.node.getCryptoManager().sign(testData);
+      
+      return res.json({
+        success: true,
+        message: 'Encryption test successful',
+        testData,
+        encrypted: encrypted.substring(0, 100) + '...', 
+        signature: signature.substring(0, 100) + '...', 
+        targetNodeId: Number(targetNodeId),
+        encryptionMethod: encrypted.length > 200 ? 'RSA' : 'Hybrid RSA+AES',
+        timestamp: Date.now()
+      });
+    } catch (cryptoError) {
+      return res.status(500).json({
+        success: false,
+        error: `Encryption test failed: ${cryptoError.message}`
+      });
+    }
+  } catch (error) {
+    next(error);
+  }
+  };
+
+	public networkCryptoStatus = async (req: Request, res: Response, next: NextFunction) => {
+		try {
+			const allPeers = this.node.table.getAllPeers();
+			const knownKeys = this.node.getKnownPublicKeys();
+			
+			const peerCryptoStatus = allPeers.map(peer => {
+			const hasKey = knownKeys.find(k => k.nodeId === peer.nodeId);
+			return {
+				nodeId: peer.nodeId,
+				port: peer.port,
+				hasPublicKey: !!hasKey,
+				keyTimestamp: hasKey ? hasKey.timestamp : null,
+				canEncrypt: !!hasKey,
+				keyAge: hasKey ? Math.floor((Date.now() - hasKey.timestamp) / 1000 / 60) + ' minutes' : 'N/A'
+			};
+			});
+			
+			const encryptionReadyCount = peerCryptoStatus.filter(p => p.canEncrypt).length;
+			const missingKeys = peerCryptoStatus.filter(p => !p.canEncrypt);
+			
+			return res.json({
+			nodeId: this.node.nodeId,
+			encryptionEnabled: this.node.isEncryptionEnabled(),
+			totalPeers: allPeers.length,
+			encryptionReady: encryptionReadyCount,
+			encryptionCoverage: allPeers.length > 0 ? (encryptionReadyCount / allPeers.length * 100).toFixed(1) + '%' : '0%',
+			peers: peerCryptoStatus,
+			missingKeys: missingKeys.map(p => ({
+				nodeId: p.nodeId,
+				suggestion: `Try: curl -X GET http://localhost:${this.node.nodeId + 2000}/secure/ping/${p.nodeId}/${p.port}`
+			})),
+			ownPublicKeyFingerprint: this.node.getPublicKeyFingerprint(),
+			suggestions: {
+				triggerDiscovery: `curl -X POST http://localhost:${this.node.nodeId + 2000}/crypto/discover`,
+				pingMissingNodes: missingKeys.length > 0 ? `Try pinging nodes: ${missingKeys.map(p => p.nodeId).join(', ')}` : 'All nodes have keys!'
+			},
+			timestamp: Date.now()
+			});
+		} catch (error) {
+			next(error);
+		}
+	};
+
+	public triggerKeyExchange = async (req: Request, res: Response, next: NextFunction) => {
+		try {
+			await this.node.triggerKeyExchangeWithAllPeers();
+			
+			const knownKeys = this.node.getKnownPublicKeys();
+			const allPeers = this.node.table.getAllPeers();
+			
+			return res.json({
+			success: true,
+			message: 'Key exchange triggered with all peers',
+			totalPeers: allPeers.length,
+			keysObtained: knownKeys.length,
+			coverage: allPeers.length > 0 ? (knownKeys.length / allPeers.length * 100).toFixed(1) + '%' : '0%',
+			keys: knownKeys.map(k => ({
+				nodeId: k.nodeId,
+				fingerprint: require('crypto').createHash('sha256').update(k.publicKey).digest('hex').substring(0, 16),
+				age: Math.floor((Date.now() - k.timestamp) / 1000) + 's'
+			})),
+			nextStep: 'Try findValue operations - they should now be encrypted!',
+			timestamp: Date.now()
+			});
+		} catch (error) {
+			next(error);
+		}
+	};
+
+	public findGatewaysSecure = async (req: Request, res: Response, next: NextFunction) => {
+		try {
+			const { blockchainId } = req.params;
+			const { includeUnhealthy = 'false', maxAge } = req.query;
+			
+			if (!blockchainId) {
+				return res.status(400).json({ 
+					error: 'blockchainId is required' 
+				});
+			}
+			
+			console.log(`API: Secure finding gateways for ${blockchainId}`);
+			const allGateways = await this.node.findGatewaysSecure(blockchainId);
+			
+			// Filter gateways based on query parameters
+			let filteredGateways = allGateways;
+			
+			// Filter by age if specified
+			if (maxAge) {
+				const maxAgeMs = parseInt(maxAge as string) * 60 * 1000;
+				filteredGateways = filteredGateways.filter(gw => 
+					Date.now() - gw.timestamp <= maxAgeMs
+				);
+			}
+			
+			// Filter by health status
+			if (includeUnhealthy === 'false') {
+				filteredGateways = filteredGateways.filter(gw => {
+					return gw.isHealthy !== false;
+				});
+			}
+			
+			// Enhance gateway info with computed fields
+			const enhancedGateways = filteredGateways.map(gw => {
+				const gateway = gw instanceof GatewayInfo ? gw : GatewayInfo.deserialize(JSON.stringify(gw));
+				return gateway.toSummary();
+			});
+			
+			return res.json({
+				blockchainId,
+				gateways: enhancedGateways,
+				count: enhancedGateways.length,
+				totalFound: allGateways.length,
+				filtered: allGateways.length - enhancedGateways.length,
+				searchedFrom: {
+					nodeId: this.node.nodeId,
+					httpPort: 2000 + this.node.nodeId,
+					udpPort: this.node.port
+				},
+				encrypted: this.node.isEncryptionEnabled(),
+				encryptionCoverage: this.getEncryptionCoverage(),
+				filters: {
+					includeUnhealthy: includeUnhealthy === 'true',
+					maxAge: maxAge ? `${maxAge} minutes` : 'none'
+				},
+				message: enhancedGateways.length > 0 
+					? `Found ${enhancedGateways.length} gateway(s) for ${blockchainId} (secure)`
+					: `No gateways found for ${blockchainId}`,
+				timestamp: Date.now()
+			});
+		} catch (error) {
+			console.error('Error finding gateways securely:', error);
+			next(error);
+		}
+	};
+
+	public storeGatewaySecure = async (req: Request, res: Response, next: NextFunction) => {
+		try {
+			const { blockchainId, endpoint, supportedProtocols = ['SATP'], performHealthCheck = true } = req.body;
+			
+			if (!blockchainId || !endpoint) {
+				return res.status(400).json({
+					success: false,
+					error: 'Missing required fields: blockchainId and endpoint are required',
+					received: { blockchainId, endpoint, supportedProtocols }
+				});
+			}
+
+			console.log(`API: Secure storing gateway ${blockchainId} -> ${endpoint}`);
+
+			// Create and validate gateway info
+			let gatewayInfo: GatewayInfo;
+			try {
+				gatewayInfo = new GatewayInfo(
+					blockchainId,
+					this.node.nodeId,
+					endpoint,
+					Array.isArray(supportedProtocols) ? supportedProtocols : [supportedProtocols]
+				);
+			} catch (validationError) {
+				return res.status(400).json({
+					success: false,
+					error: `Gateway validation failed: ${validationError.message}`,
+					details: { blockchainId, endpoint, supportedProtocols }
+				});
+			}
+
+			// Optional health check
+			if (performHealthCheck) {
+				try {
+					console.log(`Performing health check for ${endpoint}`);
+					const healthResult = await this.performGatewayHealthCheck(endpoint);
+					gatewayInfo.updateHealth(healthResult.healthy, healthResult.chainId);
+					
+					if (!healthResult.healthy) {
+						console.warn(`Health check failed for ${endpoint}: ${healthResult.error}`);
+					}
+				} catch (healthError) {
+					console.warn(`Health check error for ${endpoint}:`, healthError.message);
+					gatewayInfo.updateHealth(false);
+				}
+			}
+			
+			// Store using secure method
+			const results = await this.node.storeGatewaySecure(gatewayInfo);
+			
+			const successful = results.filter(r => r.status === 'fulfilled').length;
+			const failed = results.filter(r => r.status === 'rejected').length;
+			
+			// Enhanced response
+			return res.json({
+				success: true,
+				message: `Gateway for ${blockchainId} stored securely on ${successful} nodes`,
+				gateway: gatewayInfo.toSummary(),
+				storage: {
+					successful,
+					failed,
+					encrypted: this.node.isEncryptionEnabled(),
+					encryptionCoverage: this.getEncryptionCoverage()
+				},
+				nodeInfo: {
+					kademliaNodeId: this.node.nodeId,
+					httpPort: 2000 + this.node.nodeId,
+					udpPort: this.node.port
+				},
+				nextSteps: {
+					findEndpoint: `/secure/findGateway/${blockchainId}`,
+					curlExample: `curl http://localhost:${2000 + this.node.nodeId}/secure/findGateway/${blockchainId}`
+				}
+			});
+			
+		} catch (error) {
+			console.error('Error storing gateway securely:', error);
+			return res.status(500).json({
+				success: false,
+				error: 'Internal server error during secure gateway storage',
+				details: error.message
+			});
+		}
+	};
+
+	public storeGatewaySimpleSecure = async (req: Request, res: Response, next: NextFunction) => {
+		try {
+			const { blockchainId, endpoint } = req.params;
+			const { protocols, healthCheck = 'true' } = req.query;
+			
+			let supportedProtocols = ['SATP'];
+			if (protocols) {
+				supportedProtocols = typeof protocols === 'string' 
+					? protocols.split(',').map(p => p.trim()).filter(p => p.length > 0)
+					: Array.isArray(protocols) 
+						? protocols.map(p => String(p).trim()).filter(p => p.length > 0)
+						: ['SATP'];
+			}
+			
+			const decodedEndpoint = decodeURIComponent(endpoint);
+			console.log(`API: Secure storing gateway via GET ${blockchainId} -> ${decodedEndpoint}`);
+			
+			// Create and validate gateway info
+			let gatewayInfo: GatewayInfo;
+			try {
+				gatewayInfo = new GatewayInfo(
+					blockchainId,
+					this.node.nodeId, 
+					decodedEndpoint,
+					supportedProtocols
+				);
+			} catch (validationError) {
+				return res.status(400).json({
+					success: false,
+					error: `Gateway validation failed: ${validationError.message}`,
+					originalEndpoint: endpoint,
+					decodedEndpoint,
+					example: 'Use: /secure/storeGateway/hardhat1/http%3A%2F%2Flocalhost%3A8545'
+				});
+			}
+
+			// Optional health check
+			if (healthCheck === 'true') {
+				try {
+					const healthResult = await this.performGatewayHealthCheck(decodedEndpoint);
+					gatewayInfo.updateHealth(healthResult.healthy, healthResult.chainId);
+				} catch (healthError) {
+					console.warn(`Health check error for ${decodedEndpoint}:`, healthError.message);
+					gatewayInfo.updateHealth(false);
+				}
+			}
+			
+			// Store using secure method
+			const results = await this.node.storeGatewaySecure(gatewayInfo);
+			
+			const successful = results.filter(r => r.status === 'fulfilled').length;
+			const failed = results.filter(r => r.status === 'rejected').length;
+			
+			return res.json({
+				success: true,
+				message: `Gateway for ${blockchainId} stored securely`,
+				gateway: gatewayInfo.toSummary(),
+				storage: {
+					successful,
+					failed,
+					encrypted: this.node.isEncryptionEnabled(),
+					encryptionCoverage: this.getEncryptionCoverage()
+				},
+				nodeInfo: {
+					kademliaNodeId: this.node.nodeId,
+					httpPort: 2000 + this.node.nodeId,
+					udpPort: this.node.port,
+				},
+				nextSteps: {
+					findEndpoint: `/secure/findGateway/${blockchainId}`,
+					curlExample: `curl http://localhost:${2000 + this.node.nodeId}/secure/findGateway/${blockchainId}`
+				}
+			});
+		
+		} catch (error) {
+			console.error('Error storing gateway securely via URL params:', error);
+			return res.status(500).json({
+				success: false,
+				error: 'Internal server error during secure gateway storage',
+				details: error.message
+			});
+		}
+	};
+
+	public listGatewaysSecure = async (req: Request, res: Response, next: NextFunction) => {
+		try {
+			const registeredGateways = this.node.getRegisteredGateways();
+			const gatewayArray = Array.from(registeredGateways.entries()).map(([blockchainId, gateway]) => {
+				const gw = gateway instanceof GatewayInfo ? gateway : GatewayInfo.deserialize(JSON.stringify(gateway));
+				return gw.toSummary();
+			});
+			
+			return res.json({
+				nodeId: this.node.nodeId,
+				totalGateways: gatewayArray.length,
+				gateways: gatewayArray,
+				encrypted: this.node.isEncryptionEnabled(),
+				encryptionCoverage: this.getEncryptionCoverage(),
+				message: `Node ${this.node.nodeId} has ${gatewayArray.length} registered gateway(s) (secure)`,
+				security: {
+					encryptionEnabled: this.node.isEncryptionEnabled(),
+					knownKeys: this.node.getKnownPublicKeys().length,
+					publicKeyFingerprint: this.node.getPublicKeyFingerprint()
+				},
+				timestamp: Date.now()
+			});
+		} catch (error) {
+			next(error);
+		}
+	};
+
+	public checkGatewayHealthSecure = async (req: Request, res: Response, next: NextFunction) => {
+		try {
+			const { blockchainId } = req.params;
+			const gateways = await this.node.findGatewaysSecure(blockchainId);
+			
+			if (gateways.length === 0) {
+				return res.json({
+					blockchainId,
+					status: 'not_found',
+					totalGateways: 0,
+					healthyGateways: 0,
+					gateways: [],
+					encrypted: this.node.isEncryptionEnabled(),
+					message: `No gateways found for ${blockchainId} (secure search)`
+				});
+			}
+			
+			console.log(`Performing secure health checks for ${gateways.length} ${blockchainId} gateways`);
+			
+			// Check health of each gateway
+			const healthChecks = await Promise.allSettled(
+				gateways.map(async (gateway) => {
+					const healthResult = await this.performGatewayHealthCheck(gateway.endpoint);
+					return {
+						...gateway,
+						...healthResult,
+						age: Date.now() - gateway.timestamp
+					};
+				})
+			);
+			
+			const healthResults = healthChecks.map(result => 
+				result.status === 'fulfilled' ? result.value : {
+					healthy: false,
+					error: 'Health check failed'
+				}
+			);
+			
+			const healthyCount = healthResults.filter(r => r.healthy).length;
+			
+			return res.json({
+				blockchainId,
+				totalGateways: gateways.length,
+				healthyGateways: healthyCount,
+				status: healthyCount > 0 ? 'healthy' : 'unhealthy',
+				gateways: healthResults,
+				encrypted: this.node.isEncryptionEnabled(),
+				encryptionCoverage: this.getEncryptionCoverage(),
+				message: `${healthyCount}/${gateways.length} gateways healthy for ${blockchainId} (secure)`,
+				security: {
+					encryptionEnabled: this.node.isEncryptionEnabled(),
+					searchWasEncrypted: this.node.isEncryptionEnabled(),
+					knownKeys: this.node.getKnownPublicKeys().length
+				},
+				timestamp: Date.now()
+			});
+		} catch (error) {
+			next(error);
+		}
+		};
+
+		// Helper method to get encryption coverage
+		private getEncryptionCoverage(): string {
+		const allPeers = this.node.table.getAllPeers();
+		const knownKeys = this.node.getKnownPublicKeys();
+
+		if (allPeers.length === 0) return '0%';
+
+		const encryptionReady = knownKeys.length;
+		return ((encryptionReady / allPeers.length) * 100).toFixed(1) + '%';
+	}
 }
 
 export default BaseController;

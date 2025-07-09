@@ -1,6 +1,9 @@
 import * as dgram from "dgram";
 import { pack, unpack } from "msgpackr";
 import { v4 } from "uuid";
+import { KeyDiscoveryManager } from '../crypto/keyDiscovery';
+import { CryptoManager } from '../crypto/keyManager';
+import { SecureMessageHandler } from '../crypto/secureMessage';
 import { DiscoveryScheduler } from "../discoveryScheduler/discoveryScheduler";
 import { GatewayInfo, IGatewayInfo } from "../gateway/gateway";
 import { App } from "../http/app";
@@ -29,8 +32,15 @@ interface FindValueResponse {
 type StoreData = MessagePayload<UDPDataInfo & { 
   key?: string; 
   value?: string;
-  blockchainId?: string;  // Add for gateway queries
-  gateways?: IGatewayInfo[];  // Add for gateway responses
+  blockchainId?: string;
+  gateways?: IGatewayInfo[];
+  securePayload?: any;
+  keyExchange?: {
+    nodeId: number;
+    publicKey: string;
+    timestamp: number;
+    requestType: 'offer' | 'request' | 'response';
+  };
 }>;
 
 class KademliaNode extends AbstractNode {
@@ -45,14 +55,26 @@ class KademliaNode extends AbstractNode {
 	private gatewayHeartbeat?: NodeJS.Timeout;
   	private registeredGateways: Map<string, GatewayInfo> = new Map();
 
+	private cryptoManager: CryptoManager;
+	private secureMessageHandler: SecureMessageHandler;
+	private keyDiscoveryManager: KeyDiscoveryManager;
+	private encryptionEnabled: boolean = true;
+
 	public getRegisteredGateways(): ReadonlyMap<string, GatewayInfo> {
   		return this.registeredGateways;
 	}
 
 	private readonly discScheduler: DiscoveryScheduler;
+	
 	constructor(id: number, port: number) {
 		super(id, port, "kademlia");
 		this.nodeContact = new Peer(this.nodeId, this.address, this.port);
+
+		// Initialize crypto components
+		this.cryptoManager = new CryptoManager();
+		this.secureMessageHandler = new SecureMessageHandler(this.cryptoManager);
+		this.keyDiscoveryManager = new KeyDiscoveryManager(this.cryptoManager, id);
+		this.encryptionEnabled = true;
 
 		this.udpTransport = new UDPTransport(this.nodeId, this.port);
 		this.wsTransport = new WebSocketTransport(this.nodeId, this.port);
@@ -61,6 +83,9 @@ class KademliaNode extends AbstractNode {
 		this.table = new RoutingTable(this.nodeId, this);
 		this.listen();
 		this.discScheduler = new DiscoveryScheduler({ jobId: "discScheduler" });
+
+		console.log(`Node ${id} initialized with encryption support`);
+		console.log(`Public key fingerprint: ${this.getPublicKeyFingerprint()}`);
 	}
 
 	// register transport listeners
@@ -76,11 +101,22 @@ class KademliaNode extends AbstractNode {
 		return (cb) => this.wsTransport.server.close(cb);
 	};
 
-	// node start function
 	public start = async () => {
-		// const clostest = getIdealDistance();
 		await this.table.updateTables(new Peer(0, this.address, 3000));
 		await this.initDiscScheduler();
+
+		// Store our public key in DHT
+		try {
+			await this.keyDiscoveryManager.storeOwnKeyInDHT(
+				(key, value) => this.store(key, value)
+			);
+			console.log(`Node ${this.nodeId} public key stored in DHT`);
+		} catch (error) {
+			console.error(`Failed to store public key in DHT:`, error);
+		}
+
+		// Start crypto maintenance
+		this.startCryptoMaintenance();
 	};
 
 	public async initDiscScheduler() {
@@ -134,7 +170,6 @@ class KademliaNode extends AbstractNode {
 		} catch (e) {
 			const errorMessage = extractError(e);
 			this.log.info(`message: ${errorMessage}, fn: handleFindNodeQuery`);
-			// this.handleTcpDisconnet(extractNumber(errorMessage) - 3000);
 		}
 		return hasCloserThanExist;
 	};
@@ -166,14 +201,12 @@ class KademliaNode extends AbstractNode {
 	public async store(key: number, value: string) {
 		console.log(`Node ${this.nodeId} initiating store for key ${key}, value type: ${typeof value}, value: ${value?.substring(0, 100)}...`);
   
-		// Ensure value is a string
 		if (typeof value !== 'string') {
 			console.error(`Store method received non-string value:`, value);
 			value = typeof value === 'object' ? JSON.stringify(value) : String(value);
 		}
 		
-		// Find the k-closest nodes to the key (not all peers)
-		const closestNodes = this.table.findNode(key, 3); // Store on 3 closest nodes for redundancy
+		const closestNodes = this.table.findNode(key, 3);
 		
 		console.log(`Storing on ${closestNodes.length} closest nodes to key ${key}:`, 
 			closestNodes.map(n => ({ 
@@ -183,9 +216,7 @@ class KademliaNode extends AbstractNode {
 			}))
 		);
 		
-		// If no nodes found or only self, include self
 		if (closestNodes.length === 0 || !closestNodes.find(n => n.nodeId === this.nodeId)) {
-			// Also store locally if we're one of the closest
 			const selfDistance = XOR(this.nodeId, key);
 			const shouldStoreLocally = closestNodes.length < 3 || 
 			closestNodes.some(n => XOR(n.nodeId, key) > selfDistance);
@@ -202,7 +233,7 @@ class KademliaNode extends AbstractNode {
 			try {
 			const promises = this.sendManyUdp(nodes, MessageType.Store, {
 				key,
-				value, // Make sure this is a string
+				value,
 			});
 			const results = await Promise.all(promises);
 			console.log(`Store operation completed on ${results.length} nodes`);
@@ -213,11 +244,48 @@ class KademliaNode extends AbstractNode {
 		}
 	}
 
+	// Enhanced secure store method
+	public async secureStore(key: number, value: string): Promise<any> {
+		console.log(`Node ${this.nodeId} initiating secure store for key ${key}`);
+		
+		const closestNodes = this.table.findNode(key, 3);
+		
+		const storePromises = closestNodes.map(async (node) => {
+			// Prepare encrypted message
+			const securePayload = this.secureMessageHandler.prepareMessage(
+				{ key, value },
+				node.nodeId
+			);
+			
+			const payload = {
+				resId: v4(),
+				key,
+				value,
+				securePayload
+			};
+			
+			const to = new Peer(node.nodeId, this.address, node.port);
+			const message = NodeUtils.createUdpMessage(
+				MessageType.Store,
+				payload,
+				this.nodeContact,
+				to
+			);
+			
+			return this.udpTransport.sendMessage(message, this.udpMessageResolver);
+		});
+		
+		const results = await Promise.allSettled(storePromises);
+		const successful = results.filter(r => r.status === 'fulfilled').length;
+		
+		console.log(`Secure store completed on ${successful}/${closestNodes.length} nodes`);
+		return results;
+	}
+
 	public async findValue(value: string): Promise<FindValueResponse | null> {
 		const key = hashKeyAndmapToKeyspace(value);
 		console.log(`Node ${this.nodeId} looking for value "${value}" with key ${key}`);
 		
-		// First check if we have it locally
 		const localValue = await this.table.findValue(key.toString());
 		if (typeof localValue === 'string') {
 			console.log(`Found value locally on node ${this.nodeId}`);
@@ -231,7 +299,6 @@ class KademliaNode extends AbstractNode {
 			};
 		}
 		
-		// Get the k-closest nodes to the key
 		const closestNodes = this.table.findNode(key, 20);
 		
 		console.log(`Querying ${closestNodes.length} closest nodes for key ${key}:`, 
@@ -246,7 +313,6 @@ class KademliaNode extends AbstractNode {
 		
 		for (const nodes of closestNodesChunked) {
 			try {
-				// Track which node we're querying
 				const nodePromises = nodes.map(async (node) => {
 					console.log(`Querying node ${node.nodeId} at port ${node.port} (distance: ${XOR(node.nodeId, key)})`);
 					const result = await this.sendSingleFindValue(node, key);
@@ -282,88 +348,189 @@ class KademliaNode extends AbstractNode {
 
 	public handleMessage = async (msg: Buffer, info: dgram.RemoteInfo) => {
 		try {
-			const message = unpack(msg) as Message<StoreData>;
-			const externalContact = message.from.nodeId;
-			await this.table.updateTables(new Peer(message.from.nodeId, this.address, message.from.port));
+			const rawMessage = unpack(msg) as Message<StoreData>;
+			const senderNodeId = rawMessage.from.nodeId;
 
-			switch (message.type) {
+			// Handle key discovery messages first (always unencrypted)
+			if (rawMessage.type === 'KEY_DISCOVERY' || rawMessage.type === 'KEY_RESPONSE') {
+				await this.handleKeyDiscoveryMessage(rawMessage);
+				return;
+			}
+
+			// Process secure payload if present
+			let processedMessage = rawMessage;
+			if (rawMessage.data?.data?.securePayload) {
+				try {
+					const decryptedData = this.secureMessageHandler.processMessage(
+						rawMessage.data.data.securePayload,
+						senderNodeId
+					);
+					
+					// Replace the secure payload with decrypted data
+					processedMessage.data.data = {
+						...rawMessage.data.data,
+						...decryptedData
+					};
+					
+					console.log(`Successfully decrypted message from node ${senderNodeId}`);
+				} catch (decryptError) {
+					console.error(`Failed to decrypt message from node ${senderNodeId}:`, decryptError);
+					// Could choose to reject message or handle as unencrypted
+					return;
+				}
+			}
+
+			const externalContact = processedMessage.from.nodeId;
+			await this.table.updateTables(new Peer(processedMessage.from.nodeId, this.address, processedMessage.from.port));
+
+			switch (processedMessage.type) {
 				case MessageType.Store: {
-					const key = message.data.data?.key;
-					const value = message.data.data?.value;
+					const key = processedMessage.data.data?.key;
+					const value = processedMessage.data.data?.value;
 					
 					console.log(`Node ${this.nodeId} received STORE message:`, {
 						key,
 						valueType: typeof value,
 						valueLength: value?.length,
+						encrypted: !!rawMessage.data.data?.securePayload,
 						valuePreview: value?.substring(0, 50) + (value?.length > 50 ? '...' : '')
 					});
 					
-					// Ensure we're storing a string
 					if (typeof value === 'string') {
 						await this.table.nodeStore<StoreData>(key, value);
 					} else {
 						console.error(`Received non-string value in STORE message:`, value);
-						// Convert to string if possible
 						const stringValue = typeof value === 'object' ? JSON.stringify(value) : String(value);
 						await this.table.nodeStore<StoreData>(key, stringValue);
 					}
 					
-					await this.handleMessageResponse(MessageType.Pong, message, message.data?.data);
+					await this.handleMessageResponse(MessageType.Pong, processedMessage, processedMessage.data?.data);
 					break;
 				}
 				case MessageType.Ping: {
-					this.udpTransport.messages.PING.set(message.data.data.resId, message);
-					await this.handleMessageResponse(MessageType.Pong, message, message.data?.data);
+					this.udpTransport.messages.PING.set(processedMessage.data.data.resId, processedMessage);
+					
+					// Handle key exchange in ping
+					if (processedMessage.data.data.keyExchange) {
+						this.cryptoManager.storePublicKey(
+							processedMessage.data.data.keyExchange.nodeId,
+							processedMessage.data.data.keyExchange.publicKey
+						);
+						console.log(`Stored public key from node ${processedMessage.data.data.keyExchange.nodeId} via ping`);
+					}
+					
+					// Send pong with our public key
+					const responseData = {
+						resId: processedMessage.data.data.resId,
+						keyExchange: {
+							nodeId: this.nodeId,
+							publicKey: this.cryptoManager.getPublicKey(),
+							timestamp: Date.now(),
+							requestType: 'response' as const
+						}
+					};
+					
+					await this.handleMessageResponse(MessageType.Pong, processedMessage, responseData);
 					break;
 				}
 				case MessageType.Reply: {
-					const resId = message.data.data.resId;
-					this.udpTransport.messages.REPLY.set(message.data.data.resId, message);
-					this.emitter.emit(`response_reply_${resId}`, { ...message.data?.data, error: null });
+					const resId = processedMessage.data.data.resId;
+					this.udpTransport.messages.REPLY.set(processedMessage.data.data.resId, processedMessage);
+					this.emitter.emit(`response_reply_${resId}`, { ...processedMessage.data?.data, error: null });
 					break;
 				}
 				case MessageType.Pong: {
-					const resId = message.data.data.resId;
+					const resId = processedMessage.data.data.resId;
+					
+					// Handle key exchange in pong
+					if (processedMessage.data.data.keyExchange) {
+						this.cryptoManager.storePublicKey(
+							processedMessage.data.data.keyExchange.nodeId,
+							processedMessage.data.data.keyExchange.publicKey
+						);
+						console.log(`Stored public key from node ${processedMessage.data.data.keyExchange.nodeId} via pong`);
+					}
+					
 					this.emitter.emit(`response_pong_${resId}`, { resId, error: null });
 					break;
 				}
 				case MessageType.FoundResponse: {
-					const m = (message as any).data.data;
-					this.udpTransport.messages.REPLY.set(m.resId, message);
-					this.emitter.emit(`response_findValue_${m.resId}`, { ...message, error: null });
+					const m = (processedMessage as any).data.data;
+					this.udpTransport.messages.REPLY.set(m.resId, processedMessage);
+					this.emitter.emit(`response_findValue_${m.resId}`, { ...processedMessage, error: null });
 					break;
 				}
 				case MessageType.FindNode: {
 					const closestNodes = this.table.findNode(externalContact, ALPHA);
-					const msgData = { resId: message.data.data.resId, closestNodes };
+					const msgData = { resId: processedMessage.data.data.resId, closestNodes };
 
-					this.udpTransport.messages.FIND_NODE.set(message.data.data.resId, message);
-					await this.handleMessageResponse(MessageType.Reply, message, msgData);
+					this.udpTransport.messages.FIND_NODE.set(processedMessage.data.data.resId, processedMessage);
+					await this.handleMessageResponse(MessageType.Reply, processedMessage, msgData);
 					break;
 				}
 				case MessageType.FindValue: {
-					const res = await this.table.findValue(message.data.data.key);
+						// Handle key exchange first
+					if (processedMessage.data.data.keyExchange) {
+						const keyExchange = processedMessage.data.data.keyExchange;
+						this.cryptoManager.storePublicKey(keyExchange.nodeId, keyExchange.publicKey);
+						console.log(`Stored public key from node ${keyExchange.nodeId} via FindValue request`);
+					}
+
+					// Check if this is an encrypted request
+					let searchKey = processedMessage.data.data.key;
+					
+					if (processedMessage.data.data?.securePayload) {
+						console.log(`Received encrypted FindValue request from node ${externalContact}`);
+					} else {
+						console.log(`Received unencrypted FindValue request from node ${externalContact}`);
+					}
+
+					const res = await this.table.findValue(searchKey);
 					const value = res;
 					
 					if (value && typeof value === 'string') {
-						// Fix the logging to properly display the value
 						const displayValue = value.substring(0, 100);
-						console.log(`Node ${this.nodeId} found value for key ${message.data.data.key}: ${displayValue}${value.length > 100 ? '...' : ''}`);
-					} else if (value) {
-						// This case should not happen for gateway data, but let's see what it is
-						console.log(`Node ${this.nodeId} found NON-STRING value for key ${message.data.data.key}:`, typeof value, Array.isArray(value) ? `Array[${value.length}]` : value);
+						console.log(`Node ${this.nodeId} found value for key ${searchKey}: ${displayValue}${value.length > 100 ? '...' : ''}`);
 					} else {
-						console.log(`Node ${this.nodeId} did not find value for key ${message.data.data.key}`);
+						console.log(`Node ${this.nodeId} did not find value for key ${searchKey}`);
 					}
 					
-					await this.handleMessageResponse(MessageType.FoundResponse, message, { 
-						resId: message.data.data.resId, 
+					// Create base response data
+					let responseData: any = { 
+						resId: processedMessage.data.data.resId, 
 						value 
-					});
+					};
+
+					// Always add our key exchange in response
+					responseData.keyExchange = {
+						nodeId: this.nodeId,
+						publicKey: this.cryptoManager.getPublicKey(),
+						timestamp: Date.now(),
+						requestType: 'response' as const
+					};
+
+					// If we have the sender's key, encrypt the response
+					const hasSenderKey = !!this.cryptoManager.getStoredPublicKey(externalContact);
+					if (this.encryptionEnabled && hasSenderKey) {
+						try {
+							const secureResponsePayload = this.secureMessageHandler.prepareMessage(
+								{ resId: responseData.resId, value, keyExchange: responseData.keyExchange },
+								externalContact
+							);
+							responseData.securePayload = secureResponsePayload;
+							console.log(`Encrypting FindValue response to node ${externalContact}`);
+						} catch (error) {
+							console.warn(`Failed to encrypt FindValue response to node ${externalContact}:`, error.message);
+						}
+					} else {
+						console.log(`Sending unencrypted FindValue response to node ${externalContact} (encryption: ${this.encryptionEnabled}, hasKey: ${hasSenderKey})`);
+					}
+					
+					await this.handleMessageResponse(MessageType.FoundResponse, processedMessage, responseData);
 					break;
 				}
 				case MessageType.FindGateway: {
-						const blockchainId = message.data.data?.blockchainId;
+						const blockchainId = processedMessage.data.data?.blockchainId;
 						if (!blockchainId) {
 							console.error('FindGateway message missing blockchainId');
 							break;
@@ -373,7 +540,6 @@ class KademliaNode extends AbstractNode {
 						
 						const localGateways: IGatewayInfo[] = [];
 						
-						// Check if we're a gateway for this blockchain
 						if (this.registeredGateways.has(blockchainId)) {
 							const gateway = this.registeredGateways.get(blockchainId)!;
 							if (Date.now() - gateway.timestamp < 3600000) {
@@ -382,7 +548,6 @@ class KademliaNode extends AbstractNode {
 							}
 						}
 						
-						// Also check our storage using the NEW key format
 						const gatewayKey = hashKeyAndmapToKeyspace(`gw-${blockchainId}`);
 						console.log(`Checking local storage for key: ${gatewayKey}`);
 						
@@ -409,11 +574,11 @@ class KademliaNode extends AbstractNode {
 						console.log(`Responding with ${localGateways.length} gateways for ${blockchainId}`);
 						
 						const msgData = { 
-							resId: message.data.data.resId, 
+							resId: processedMessage.data.data.resId, 
 							gateways: localGateways
 						};
 						
-						await this.handleMessageResponse(MessageType.GatewayResponse, message, msgData);
+						await this.handleMessageResponse(MessageType.GatewayResponse, processedMessage, msgData);
 						break;
 				}
 				default:
@@ -424,6 +589,44 @@ class KademliaNode extends AbstractNode {
 			this.log.error(errorMessage);
 		}
 	};
+
+	// Handle key discovery messages
+	private async handleKeyDiscoveryMessage(message: any): Promise<void> {
+		const keyExchange = message.data.data.keyExchange;
+		const senderNodeId = message.from.nodeId;
+		
+		if (keyExchange.requestType === 'request') {
+			// Store sender's public key
+			this.cryptoManager.storePublicKey(senderNodeId, keyExchange.publicKey);
+			console.log(`Received key discovery request from node ${senderNodeId}`);
+			
+			// Send our key back
+			const responsePayload = {
+				resId: message.data.data.resId,
+				keyExchange: {
+					nodeId: this.nodeId,
+					publicKey: this.cryptoManager.getPublicKey(),
+					timestamp: Date.now(),
+					requestType: 'response'
+				}
+			};
+			
+			const to = new Peer(senderNodeId, this.address, message.from.port);
+			const responseMessage = NodeUtils.createUdpMessage(
+				'KEY_RESPONSE' as any,
+				responsePayload,
+				this.nodeContact,
+				to
+			);
+			
+			await this.udpTransport.sendMessage(responseMessage, this.udpMessageResolver);
+			
+		} else if (keyExchange.requestType === 'response') {
+			// Store received public key
+			this.cryptoManager.storePublicKey(senderNodeId, keyExchange.publicKey);
+			console.log(`Received public key from node ${senderNodeId} via key discovery`);
+		}
+	}
 
 	public udpMessageResolver = (params: any, resolve: (value?: unknown) => void, reject: (reason?: any) => void) => {
 		const { type, responseId } = params;
@@ -460,22 +663,26 @@ class KademliaNode extends AbstractNode {
 			resolve(data);
 		});
 
-		// FIX: This is the critical part for findValue responses
 		this.emitter.once(`response_findValue_${responseId}`, (data: any) => {
 			if (data.error) {
 				return reject(data.error);
 			}
 			
-			// The issue is here - we need to properly extract the value
+			if (data && data.data && data.data.data && data.data.data.keyExchange) {
+				const keyExchange = data.data.data.keyExchange;
+				this.cryptoManager.storePublicKey(keyExchange.nodeId, keyExchange.publicKey);
+				console.log(`Stored public key from node ${keyExchange.nodeId} via FindValue response`);
+			}
+			
 			console.log(`Processing findValue response:`, {
 				hasData: !!data,
 				dataType: typeof data,
 				hasDataData: !!(data && data.data),
 				hasValue: !!(data && data.data && data.data.data && data.data.data.value),
+				encrypted: !!(data && data.data && data.data.data && data.data.data.securePayload),
 				rawValue: data && data.data && data.data.data ? data.data.data.value : 'not found'
 			});
 			
-			// Extract the actual value properly
 			const actualValue = data && data.data && data.data.data ? data.data.data.value : null;
 			
 			if (actualValue && typeof actualValue === 'string') {
@@ -488,9 +695,25 @@ class KademliaNode extends AbstractNode {
 		});
 	};
 
-	private handleMessageResponse = async (type: MessageType, message: Message<StoreData>, data: any) => {
-		const to = Peer.fromJSON(message.from.nodeId, message.from.address, message.from.port, message.from.lastSeen);
-		const msg = NodeUtils.createUdpMessage(type, data, this.nodeContact, to);
+	// Enhanced message response with potential encryption
+	private handleMessageResponse = async (type: MessageType, originalMessage: Message<StoreData>, data: any) => {
+		const to = Peer.fromJSON(originalMessage.from.nodeId, originalMessage.from.address, originalMessage.from.port, originalMessage.from.lastSeen);
+		
+		// Prepare encrypted response if we have recipient's key and encryption is enabled
+		let responseData = data;
+		if (this.encryptionEnabled && this.cryptoManager.getStoredPublicKey(to.nodeId)) {
+			try {
+				const securePayload = this.secureMessageHandler.prepareMessage(data, to.nodeId);
+				responseData = {
+					...data,
+					securePayload
+				};
+			} catch (error) {
+				console.warn(`Failed to encrypt response to node ${to.nodeId}, sending unencrypted:`, error.message);
+			}
+		}
+		
+		const msg = NodeUtils.createUdpMessage(type, responseData, this.nodeContact, to);
 		await this.udpTransport.sendMessage(msg, this.udpMessageResolver);
 	};
 
@@ -503,6 +726,32 @@ class KademliaNode extends AbstractNode {
 		return nodes.map((node: Peer) => {
 			const to = new Peer(node.nodeId, this.address, node.port);
 			const payload = { resId: v4(), ...data };
+			
+			// Add key exchange if we don't have their key
+			if (!this.cryptoManager.getStoredPublicKey(node.nodeId)) {
+				payload.keyExchange = {
+					nodeId: this.nodeId,
+					publicKey: this.cryptoManager.getPublicKey(),
+					timestamp: Date.now(),
+					requestType: 'offer'
+				};
+				console.log(`Adding key exchange offer to ${type} message for node ${node.nodeId}`);
+			}
+
+			// Add encryption if possible
+			if (this.shouldUseEncryption(node.nodeId)) {
+				try {
+					const securePayload = this.secureMessageHandler.prepareMessage(
+						{ ...data },
+						node.nodeId
+					);
+					payload.securePayload = securePayload;
+					console.log(`Encrypting ${type} message to node ${node.nodeId}`);
+				} catch (error) {
+					console.warn(`Failed to encrypt ${type} message to node ${node.nodeId}:`, error.message);
+				}
+			}
+			
 			const message = NodeUtils.createUdpMessage(type, payload, this.nodeContact, to);
 			return this.udpTransport.sendMessage(message, this.udpMessageResolver);
 		});
@@ -541,8 +790,6 @@ class KademliaNode extends AbstractNode {
 		const peer = new Peer(nodeId, this.address, nodeId + 3000);
 		const bucket = this.table.findBucket(peer);
 		bucket.removeNode(peer);
-
-		// if (bucket.nodes.length === 0) this.table.removeBucket();
 	};
 
 	private updatePeerDiscoveryInterval = async (peers: Peer[]) => {
@@ -576,7 +823,40 @@ class KademliaNode extends AbstractNode {
 	private async sendSingleFindValue(node: Peer, key: number): Promise<string | null> {
 		try {
 			const to = new Peer(node.nodeId, this.address, node.port);
-			const payload = { resId: v4(), key };
+			
+			let payload: any = { 
+				resId: v4(), 
+				key 
+			};
+
+			// Always add key exchange if we don't have their key
+			const hasTheirKey = !!this.cryptoManager.getStoredPublicKey(node.nodeId);
+			if (!hasTheirKey) {
+				payload.keyExchange = {
+					nodeId: this.nodeId,
+					publicKey: this.cryptoManager.getPublicKey(),
+					timestamp: Date.now(),
+					requestType: 'offer' as const
+				};
+				console.log(`Adding key exchange offer to FindValue request for node ${node.nodeId}`);
+			}
+
+			// Add encryption if we have their key
+			if (this.encryptionEnabled && hasTheirKey) {
+				try {
+					const securePayload = this.secureMessageHandler.prepareMessage(
+						{ key },
+						node.nodeId
+					);
+					payload.securePayload = securePayload;
+					console.log(`Encrypting FindValue request to node ${node.nodeId}`);
+				} catch (error) {
+					console.warn(`Failed to encrypt FindValue request to node ${node.nodeId}:`, error.message);
+				}
+			} else {
+				console.log(`Sending unencrypted FindValue request to node ${node.nodeId} (encryption: ${this.encryptionEnabled}, hasKey: ${hasTheirKey})`);
+			}
+
 			const message = NodeUtils.createUdpMessage(MessageType.FindValue, payload, this.nodeContact, to);
 			
 			console.log(`Sending FindValue request to node ${node.nodeId} for key ${key}`);
@@ -587,17 +867,15 @@ class KademliaNode extends AbstractNode {
 				resultType: typeof result,
 				isString: typeof result === 'string',
 				length: typeof result === 'string' ? (result as string).length : 'N/A',
+				encrypted: !!(payload.securePayload),
 				preview: typeof result === 'string' ? (result as string).substring(0, 100) : String(result)
 			});
 			
-			// Check if result is a string (the value we're looking for)
 			if (typeof result === 'string') {
 				return result;
 			}
 			
-			// If it's not a string, it might be in a nested structure
 			if (result && typeof result === 'object' && (result as any).value) {
-				console.log(`Extracting value from nested result:`, typeof (result as any).value);
 				const nestedValue = (result as any).value;
 				return typeof nestedValue === 'string' ? nestedValue : null;
 			}
@@ -615,7 +893,6 @@ class KademliaNode extends AbstractNode {
         
         allPeers.push(this.nodeContact);
         
-        // Sort by XOR distance
         const sorted = allPeers.sort((a, b) => {
             const distA = XOR(a.nodeId, key);
             const distB = XOR(b.nodeId, key);
@@ -636,8 +913,7 @@ class KademliaNode extends AbstractNode {
         }));
     }
 
-
-	// Add gateway registration method
+	// Gateway methods
 	public async registerAsGateway(
 		blockchainId: string,
 		endpoint: string,
@@ -652,16 +928,13 @@ class KademliaNode extends AbstractNode {
 			supportedProtocols
 		);
 
-		// Store locally
 		this.registeredGateways.set(blockchainId, gatewayInfo);
 
-		// Use consistent key format with storage and search methods
 		const gatewayKey = hashKeyAndmapToKeyspace(`gw-${blockchainId}`);
 		const specificKey = hashKeyAndmapToKeyspace(`gw-${blockchainId}-${this.nodeId}`);
 		
 		console.log(`Storing with keys: Primary=${gatewayKey}, Specific=${specificKey}`);
 		
-		// Store in the DHT using both keys
 		await Promise.allSettled([
 			this.store(gatewayKey, gatewayInfo.serialize()),
 			this.store(specificKey, gatewayInfo.serialize())
@@ -671,7 +944,6 @@ class KademliaNode extends AbstractNode {
 		return gatewayInfo;
 	}
 
-	// Find gateways for a blockchain
 	public async findGateways(blockchainId: string): Promise<IGatewayInfo[]> {
 		console.log(`\n=== Node ${this.nodeId} looking for gateways to ${blockchainId} ===`);
 		
@@ -680,7 +952,6 @@ class KademliaNode extends AbstractNode {
 		
 		console.log(`Generated key: gw-${blockchainId} -> ${gatewayKey}`);
 		
-		// 1. Check local registered gateways
 		if (this.registeredGateways.has(blockchainId)) {
 			const localGateway = this.registeredGateways.get(blockchainId)!;
 			console.log(`Found in local registered gateways`);
@@ -689,7 +960,6 @@ class KademliaNode extends AbstractNode {
 			console.log(`Not found in local registered gateways`);
 		}
 		
-		// 2. Check local storage directly using the numeric key
 		console.log(`\n--- Checking local storage ---`);
 		try {
 			const localValue = await this.table.findValue(gatewayKey.toString());
@@ -718,11 +988,8 @@ class KademliaNode extends AbstractNode {
 			console.error(`Error accessing local storage:`, storageError);
 		}
 		
-		// 3. Check network using DIRECT KEY LOOKUP (not findValue which hashes again)
 		console.log(`\n--- Checking network with direct key lookup ---`);
 		try {
-			// Instead of using findValue (which hashes the key again), 
-			// use sendSingleFindValue with the numeric key directly
 			const closestNodes = this.table.findNode(gatewayKey, 10);
 			console.log(`Querying ${closestNodes.length} nodes with key ${gatewayKey} directly`);
 			
@@ -738,7 +1005,7 @@ class KademliaNode extends AbstractNode {
 							gateways.push(gateway);
 							console.log(`Added gateway from network: ${gateway.blockchainId} (node ${gateway.nodeId})`);
 						}
-						break; // Found what we needed
+						break;
 					}
 				} catch (error) {
 					console.log(`Error querying node ${node.nodeId}:`, error.message);
@@ -757,57 +1024,6 @@ class KademliaNode extends AbstractNode {
 		return gateways;
 	}
 
-	private async queryNodesForGateways(blockchainId: string, nodes: Peer[]): Promise<IGatewayInfo[]> {
-		const gatewayPromises = nodes.map(node => this.queryNodeForGateway(blockchainId, node));
-		const results = await Promise.allSettled(gatewayPromises);
-		
-		const allGateways: IGatewayInfo[] = [];
-		for (const result of results) {
-			if (result.status === 'fulfilled' && result.value) {
-			allGateways.push(...result.value);
-			}
-		}
-		
-		return allGateways;
-	}
-
-	private async queryNodeForGateway(blockchainId: string, node: Peer): Promise<IGatewayInfo[]> {
-		return new Promise<IGatewayInfo[]>((resolve) => {
-			const to = new Peer(node.nodeId, this.address, node.port);
-			const payload = { resId: v4(), blockchainId };
-			const message = NodeUtils.createUdpMessage(MessageType.FindGateway, payload, this.nodeContact, to);
-			
-			const timeoutId = setTimeout(() => {
-				this.emitter.removeAllListeners(`response_gateway_${payload.resId}`);
-				resolve([]);
-			}, 2000);
-			
-			this.emitter.once(`response_gateway_${payload.resId}`, (data: any) => {
-				clearTimeout(timeoutId);
-				if (!data.error && data.gateways) {
-					resolve(data.gateways);
-				} else {
-					resolve([]);
-				}
-			});
-			
-			this.udpTransport.server.send(
-			pack(message),
-			message.to.port,
-			this.address,
-			(err) => {
-				if (err) {
-					console.error(`Error sending gateway query to node ${node.nodeId}:`, err);
-					clearTimeout(timeoutId);
-					this.emitter.removeAllListeners(`response_gateway_${payload.resId}`);
-					resolve([]);
-				}
-			}
-			);
-		});
-	}
-
-	// Start periodic refresh
 	public startGatewayHeartbeat(blockchainId: string, endpoint: string, interval: number = 300000): void {
 		this.gatewayHeartbeat = setInterval(async () => {
 		console.log(`Refreshing gateway registration for ${blockchainId}`);
@@ -822,17 +1038,17 @@ class KademliaNode extends AbstractNode {
 		}
 	}
 
+	// Enhanced bootstrap with key discovery
 	public async bootstrap(nodes: Array<{nodeId: number, address: string, port: number}>): Promise<void> {
-		console.log(`Node ${this.nodeId} bootstrapping with ${nodes.length} node(s)`);
+		console.log(`Node ${this.nodeId} starting secure bootstrap with ${nodes.length} node(s)`);
 		
 		for (const node of nodes) {
 			try {
-			// Add node to routing table
 			const peer = new Peer(node.nodeId, node.address, node.port);
 			await this.table.updateTables(peer);
 			
-			// Send a ping to establish contact
-			await this.ping(node.nodeId, node.address, node.port);
+			// Enhanced ping with key exchange
+			await this.securePing(node.nodeId, node.address, node.port);
 			
 			console.log(`Node ${this.nodeId} successfully connected to bootstrap node ${node.nodeId}`);
 			} catch (error) {
@@ -840,77 +1056,140 @@ class KademliaNode extends AbstractNode {
 			}
 		}
 		
-		// Perform initial node discovery
+		// Perform key discovery
+		await this.keyDiscoveryManager.discoverKeys(nodes);
+		
+		// Request keys for all known peers
+		const allPeers = this.table.getAllPeers();
+		for (const peer of allPeers) {
+			await this.requestPeerKey(peer.nodeId);
+		}
+		
 		await this.findNodes(this.nodeId);
+		console.log(`Secure bootstrap completed. Known keys: ${this.cryptoManager.getAllKnownKeys().length}`);
 	}
 
-	/**
-	 * Ping a specific node to check if it's alive and add it to routing table
-	 */
+	// Enhanced ping with key exchange
 	public async ping(nodeId: number, address: string, port: number): Promise<boolean> {
+		return this.securePing(nodeId, address, port);
+	}
+
+	public async securePing(nodeId: number, address: string, port: number): Promise<boolean> {
 		return new Promise((resolve) => {
 			const to = new Peer(nodeId, address, port);
-			const payload = { resId: v4() };
+			const payload = { 
+				resId: v4(),
+				keyExchange: {
+					nodeId: this.nodeId,
+					publicKey: this.cryptoManager.getPublicKey(),
+					timestamp: Date.now(),
+					requestType: 'offer' as const
+				}
+			};
+			
 			const message = NodeUtils.createUdpMessage(MessageType.Ping, payload, this.nodeContact, to);
 			
 			const timeoutId = setTimeout(() => {
-			this.emitter.removeAllListeners(`response_pong_${payload.resId}`);
-			resolve(false);
+				this.emitter.removeAllListeners(`response_pong_${payload.resId}`);
+				resolve(false);
 			}, 2000);
 			
 			this.emitter.once(`response_pong_${payload.resId}`, () => {
-			clearTimeout(timeoutId);
-			resolve(true);
+				clearTimeout(timeoutId);
+				resolve(true);
 			});
 			
 			this.udpTransport.server.send(
-			pack(message),
-			port,
-			address,
-			(err) => {
-				if (err) {
-				clearTimeout(timeoutId);
-				this.emitter.removeAllListeners(`response_pong_${payload.resId}`);
-				resolve(false);
+				pack(message),
+				port,
+				address,
+				(err) => {
+					if (err) {
+						clearTimeout(timeoutId);
+						this.emitter.removeAllListeners(`response_pong_${payload.resId}`);
+						resolve(false);
+					}
 				}
-			}
 			);
 		});
 	}
 
-	/**
-	 * Gracefully stop the node and clean up resources
-	 */
+	// Request public key from a peer
+	public async requestPeerKey(peerNodeId: number): Promise<void> {
+		try {
+			// Try DHT first
+			const keyInfo = await this.keyDiscoveryManager.findKeyInDHT(
+				peerNodeId,
+				(key) => this.findValue(key)
+			);
+			
+			if (keyInfo) {
+				console.log(`Found key for node ${peerNodeId} in DHT`);
+				return;
+			}
+			
+			// If not in DHT, send direct key request
+			await this.sendKeyDiscoveryRequest(peerNodeId);
+		} catch (error) {
+			console.error(`Failed to request key for node ${peerNodeId}:`, error);
+		}
+	}
+
+	// Send key discovery request to a specific node
+	private async sendKeyDiscoveryRequest(targetNodeId: number): Promise<void> {
+		const peer = this.table.getAllPeers().find(p => p.nodeId === targetNodeId);
+		if (!peer) {
+			console.warn(`Cannot send key request to unknown node ${targetNodeId}`);
+			return;
+		}
+
+		const requestId = v4();
+		const keyExchangeData = {
+			nodeId: this.nodeId,
+			publicKey: this.cryptoManager.getPublicKey(),
+			timestamp: Date.now(),
+			requestType: 'request' as const
+		};
+
+		const payload = {
+			resId: requestId,
+			keyExchange: keyExchangeData
+		};
+
+		const to = new Peer(peer.nodeId, this.address, peer.port);
+		const message = NodeUtils.createUdpMessage(
+			'KEY_DISCOVERY' as any,
+			payload,
+			this.nodeContact,
+			to
+		);
+
+		await this.udpTransport.sendMessage(message, this.udpMessageResolver);
+	}
+
 	public async stop(): Promise<void> {
 		console.log(`Stopping node ${this.nodeId}...`);
 		
 		try {
-			// Stop gateway heartbeat
 			this.stopGatewayHeartbeat();
 			
-			// Stop discovery scheduler
 			if (this.discScheduler) {
 			this.discScheduler.stopCronJob();
 			}
 			
-			// Remove all event listeners
 			if (this.emitter) {
 			this.emitter.removeAllListeners();
 			}
 			
-			// Close UDP server
 			if (this.udpTransport && this.udpTransport.server) {
 			await new Promise<void>((resolve) => {
-				// dgram.Socket.close() only takes a callback with no parameters
 				this.udpTransport.server.close(() => {
 				resolve();
 				});
 			});
 			}
 			
-			// Close all WebSocket connections
 			if (this.wsTransport) {
-			// Close all active connections
 			if (this.wsTransport.connections) {
 				this.wsTransport.connections.clear();
 			}
@@ -918,7 +1197,6 @@ class KademliaNode extends AbstractNode {
 				this.wsTransport.neighbors.clear();
 			}
 			
-			// Close the server
 			if (this.wsTransport.server) {
 				await new Promise<void>((resolve) => {
 				this.wsTransport.server.close(() => {
@@ -928,7 +1206,6 @@ class KademliaNode extends AbstractNode {
 			}
 			}
 			
-			// Close HTTP API server
 			if (this.api && (this.api as any).server) {
 			await new Promise<void>((resolve) => {
 				(this.api as any).server.close(() => {
@@ -943,9 +1220,6 @@ class KademliaNode extends AbstractNode {
 		}
 	}
 
-	/**
-	 * Get current status of the node
-	 */
 	public getStatus(): {
 		nodeId: number;
 		port: number;
@@ -953,6 +1227,9 @@ class KademliaNode extends AbstractNode {
 		peers: number;
 		buckets: number;
 		registeredGateways: string[];
+		encryptionEnabled: boolean;
+		knownKeys: number;
+		publicKeyFingerprint: string;
 		} {
 		return {
 			nodeId: this.nodeId,
@@ -960,11 +1237,13 @@ class KademliaNode extends AbstractNode {
 			httpPort: this.port - 1000,
 			peers: this.table.getAllPeers().length,
 			buckets: this.table.getAllBucketsLen(),
-			registeredGateways: Array.from(this.registeredGateways.keys())
+			registeredGateways: Array.from(this.registeredGateways.keys()),
+			encryptionEnabled: this.encryptionEnabled,
+			knownKeys: this.cryptoManager.getAllKnownKeys().length,
+			publicKeyFingerprint: this.getPublicKeyFingerprint()
 		};
 	}
 
-	// Add this helper method to properly parse gateway data
 	private parseGatewayData(data: string): IGatewayInfo[] {
 		const gateways: IGatewayInfo[] = [];
 		
@@ -973,7 +1252,6 @@ class KademliaNode extends AbstractNode {
 			return gateways;
 		}
 		
-		// Try parsing as single JSON object first
 		try {
 			const singleGateway = GatewayInfo.deserialize(data);
 			gateways.push(singleGateway);
@@ -983,9 +1261,7 @@ class KademliaNode extends AbstractNode {
 			console.log(`Single JSON parse failed: ${singleError.message}`);
 		}
 		
-		// Handle concatenated JSON objects (multiple gateways stored under same key)
 		try {
-			// Split on }{ pattern which indicates concatenated JSON
 			const parts = data.split('}{');
 			
 			if (parts.length === 1) {
@@ -995,11 +1271,9 @@ class KademliaNode extends AbstractNode {
 			
 			console.log(`Found ${parts.length} concatenated JSON parts`);
 			
-			// Multiple JSON objects found - reconstruct proper JSON
 			for (let i = 0; i < parts.length; i++) {
 				let jsonStr = parts[i];
 				
-				// Reconstruct proper JSON brackets
 				if (i === 0) {
 					jsonStr = jsonStr + '}';
 				} else if (i === parts.length - 1) {
@@ -1022,6 +1296,281 @@ class KademliaNode extends AbstractNode {
 		}
 		
 		return gateways;
+	}
+
+	// === CRYPTO METHODS ===
+
+	/**
+	 * Get public key fingerprint for identification
+	 */
+	public getPublicKeyFingerprint(): string {
+		const crypto = require('crypto');
+		const publicKey = this.cryptoManager.getPublicKey();
+		const hash = crypto.createHash('sha256').update(publicKey).digest('hex');
+		return hash.substring(0, 16); // First 16 chars of hash
+	}
+
+	/**
+	 * Enable/disable encryption
+	 */
+	public setEncryptionEnabled(enabled: boolean): void {
+		this.encryptionEnabled = enabled;
+		console.log(`Node ${this.nodeId} encryption ${enabled ? 'enabled' : 'disabled'}`);
+	}
+
+	/**
+	 * Get encryption status
+	 */
+	public isEncryptionEnabled(): boolean {
+		return this.encryptionEnabled;
+	}
+
+	/**
+	 * Get known public keys
+	 */
+	public getKnownPublicKeys(): Array<{nodeId: number, publicKey: string, timestamp: number}> {
+		return this.cryptoManager.getAllKnownKeys();
+	}
+
+	/**
+	 * Manually add a public key (for testing or manual configuration)
+	 */
+	public addPublicKey(nodeId: number, publicKey: string): void {
+		this.cryptoManager.storePublicKey(nodeId, publicKey);
+		console.log(`Manually added public key for node ${nodeId}`);
+	}
+
+	/**
+	 * Export keys for backup
+	 */
+	public exportKeys(): {
+		keyPair: any;
+		knownKeys: Array<{nodeId: number, publicKey: string, timestamp: number}>;
+	} {
+		return {
+			keyPair: this.cryptoManager.exportKeyPair(),
+			knownKeys: this.cryptoManager.getAllKnownKeys()
+		};
+	}
+
+	/**
+	 * Import keys from backup
+	 */
+	public importKeys(backup: {
+		keyPair: any;
+		knownKeys: Array<{nodeId: number, publicKey: string, timestamp: number}>;
+	}): void {
+		this.cryptoManager.importKeyPair(backup.keyPair);
+		
+		for (const keyInfo of backup.knownKeys) {
+			this.cryptoManager.storePublicKey(keyInfo.nodeId, keyInfo.publicKey);
+		}
+		
+		console.log(`Imported ${backup.knownKeys.length} public keys`);
+	}
+
+	/**
+	 * Periodic maintenance for crypto system
+	 */
+	public startCryptoMaintenance(): void {
+		// Clean up old keys every hour
+		setInterval(() => {
+			this.cryptoManager.cleanupOldKeys();
+			this.keyDiscoveryManager.cleanupOldRequests();
+		}, 60 * 60 * 1000); // 1 hour
+		
+		// Refresh our key in DHT every 30 minutes
+		setInterval(async () => {
+			try {
+				await this.keyDiscoveryManager.storeOwnKeyInDHT(
+					(key, value) => this.store(key, value)
+				);
+			} catch (error) {
+				console.error('Failed to refresh key in DHT:', error);
+			}
+		}, 30 * 60 * 1000); // 30 minutes
+	}
+
+	/**
+	 * Get crypto statistics
+	 */
+	public getCryptoStats(): {
+		encryptionEnabled: boolean;
+		knownKeys: number;
+		publicKeyFingerprint: string;
+		keyDiscoveryRequests: number;
+	} {
+		return {
+			encryptionEnabled: this.encryptionEnabled,
+			knownKeys: this.cryptoManager.getAllKnownKeys().length,
+			publicKeyFingerprint: this.getPublicKeyFingerprint(),
+			keyDiscoveryRequests: this.keyDiscoveryManager.getDiscoveredKeys().length
+		};
+	}
+
+	public getCryptoManager(): CryptoManager {
+		return this.cryptoManager;
+	}
+
+	public getKeyDiscoveryManager(): KeyDiscoveryManager {
+		return this.keyDiscoveryManager;
+	}
+
+	private shouldUseEncryption(recipientNodeId: number): boolean {
+		if (!this.encryptionEnabled) {
+			return false;
+		}
+		const hasKey = !!this.cryptoManager.getStoredPublicKey(recipientNodeId);
+		
+		if (!hasKey) {
+			console.log(`Encryption enabled but no key for node ${recipientNodeId}, sending unencrypted`);
+		}
+		
+		return hasKey;
+	}
+
+	public async triggerKeyExchangeWithAllPeers(): Promise<void> {
+		const allPeers = this.table.getAllPeers();
+		console.log(`Triggering key exchange with ${allPeers.length} peers`);
+		
+		const pingPromises = allPeers.map(peer => 
+			this.securePing(peer.nodeId, peer.address, peer.port)
+		);
+		
+		const results = await Promise.allSettled(pingPromises);
+		const successful = results.filter(r => r.status === 'fulfilled' && r.value).length;
+		
+		console.log(`Key exchange completed with ${successful}/${allPeers.length} peers`);
+		console.log(`Now have ${this.cryptoManager.getAllKnownKeys().length} public keys`);
+	}
+
+	public async findGatewaysSecure(blockchainId: string): Promise<IGatewayInfo[]> {
+		console.log(`\n=== Node ${this.nodeId} looking for gateways to ${blockchainId} (SECURE) ===`);
+		
+		const gateways: IGatewayInfo[] = [];
+		const gatewayKey = hashKeyAndmapToKeyspace(`gw-${blockchainId}`);
+		
+		console.log(`Generated key: gw-${blockchainId} -> ${gatewayKey}`);
+		
+		// 1. Check local registered gateways
+		if (this.registeredGateways.has(blockchainId)) {
+			const localGateway = this.registeredGateways.get(blockchainId)!;
+			console.log(`Found in local registered gateways`);
+			gateways.push(localGateway);
+		}
+		
+		// 2. Check local storage
+		console.log(`\n--- Checking local storage ---`);
+		try {
+			const localValue = await this.table.findValue(gatewayKey.toString());
+			if (typeof localValue === 'string') {
+				try {
+					const gateway = GatewayInfo.deserialize(localValue);
+					console.log(`Successfully parsed local gateway: ${gateway.blockchainId} (node ${gateway.nodeId})`);
+					
+					if (gateway.blockchainId === blockchainId && 
+						!gateways.find(g => g.nodeId === gateway.nodeId)) {
+						gateways.push(gateway);
+					}
+				} catch (parseError) {
+					console.error(`Failed to parse local storage value:`, parseError.message);
+				}
+			}
+		} catch (storageError) {
+			console.error(`Error accessing local storage:`, storageError);
+		}
+		
+		// 3. Enhanced network search with encryption
+		console.log(`\n--- Checking network with SECURE lookup ---`);
+		try {
+			const closestNodes = this.table.findNode(gatewayKey, 10);
+			console.log(`Querying ${closestNodes.length} nodes with key ${gatewayKey} securely`);
+			
+			for (const node of closestNodes) {
+				try {
+					// Use encrypted findValue if we have the key
+					const hasKey = !!this.cryptoManager.getStoredPublicKey(node.nodeId);
+					if (hasKey) {
+						console.log(`Using encrypted query for node ${node.nodeId}`);
+					} else {
+						console.log(`Using unencrypted query for node ${node.nodeId} (no key)`);
+					}
+					
+					const result = await this.sendSingleFindValue(node, gatewayKey);
+					if (result && typeof result === 'string') {
+						console.log(`Found gateway data from node ${node.nodeId}`);
+						
+						const gateway = GatewayInfo.deserialize(result);
+						if (gateway.blockchainId === blockchainId && 
+							!gateways.find(g => g.nodeId === gateway.nodeId)) {
+							gateways.push(gateway);
+							console.log(`Added gateway from network: ${gateway.blockchainId} (node ${gateway.nodeId})`);
+						}
+						break;
+					}
+				} catch (error) {
+					console.log(`Error querying node ${node.nodeId}:`, error.message);
+				}
+			}
+		} catch (networkError) {
+			console.error(`Network search error:`, networkError);
+		}
+		
+		console.log(`\n=== SECURE Final result: ${gateways.length} gateway(s) for ${blockchainId} ===`);
+		gateways.forEach((gw, i) => {
+			console.log(`${i + 1}. ${gw.blockchainId} - node ${gw.nodeId} - ${gw.endpoint}`);
+		});
+		console.log(`================================================\n`);
+		
+		return gateways;
+	}
+
+	public async storeGatewaySecure(gatewayInfo: GatewayInfo): Promise<any> {
+		console.log(`Node ${this.nodeId} storing gateway securely for ${gatewayInfo.blockchainId}`);
+		
+		// Store locally
+		this.registeredGateways.set(gatewayInfo.blockchainId, gatewayInfo);
+		
+		// Generate storage keys
+		const gatewayKey = hashKeyAndmapToKeyspace(`gw-${gatewayInfo.blockchainId}`);
+		const specificKey = hashKeyAndmapToKeyspace(`gw-${gatewayInfo.blockchainId}-${this.nodeId}`);
+		
+		console.log(`Storing with keys: Primary=${gatewayKey}, Specific=${specificKey}`);
+		
+		// Store using secure method (uses encryption if keys available)
+		const results = await Promise.allSettled([
+			this.secureStore(gatewayKey, gatewayInfo.serialize()),
+			this.secureStore(specificKey, gatewayInfo.serialize())
+		]);
+		
+		const successful = results.filter(r => r.status === 'fulfilled').length;
+		const failed = results.filter(r => r.status === 'rejected').length;
+		
+		console.log(`Secure gateway storage completed: ${successful} successful, ${failed} failed`);
+		
+		return results;
+	}
+
+	// Enhanced registerAsGateway with secure storage
+	public async registerAsGatewaySecure(
+		blockchainId: string,
+		endpoint: string,
+		supportedProtocols: string[] = ['SATP']
+	): Promise<GatewayInfo> {
+		console.log(`Node ${this.nodeId} registering as gateway for ${blockchainId} (SECURE)`);
+		
+		const gatewayInfo = new GatewayInfo(
+			blockchainId,
+			this.nodeId,
+			endpoint,
+			supportedProtocols
+		);
+
+		// Store using secure method
+		await this.storeGatewaySecure(gatewayInfo);
+		
+		console.log(`Secure gateway registration completed for ${blockchainId}`);
+		return gatewayInfo;
 	}
 }
 
