@@ -28,7 +28,7 @@ pnpm start // for single node (prod script)
 
 // or
 
-pnpm run start:dev // to run 16 nodes concurrently (dev script)
+pnpm run start:dev // to run 32 nodes concurrently (dev script)
 ```
 
 You can then observe the peer discovery process and begin to interact with each node's HTTP API for getting node information and sending messages.
@@ -54,11 +54,6 @@ For all available HTTP methods, see `src/http/controller/basecontroller.ts`
 **Health Check**
 ```bash
 GET http://localhost:2001/ping
-```
-
-**Node Status** 
-```bash
-GET http://localhost:2001/status
 ```
 
 **Get Node Buckets**
@@ -191,7 +186,7 @@ GET http://localhost:2001/crypto/encryption/false
 **Trigger Key Discovery**
 Initiates key discovery with all known peers
 ```bash
-POST http://localhost:2001/crypto/discover
+curl -X POST http://localhost:2001/crypto/discover
 ```
 
 **Trigger Key Exchange**
