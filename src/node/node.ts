@@ -917,15 +917,15 @@ class KademliaNode extends AbstractNode {
 	public async registerAsGateway(
 		blockchainId: string,
 		endpoint: string,
-		supportedProtocols: string[] = ['SATP']
+		pubKey?: string
 	): Promise<GatewayInfo> {
-		console.log(`Node ${this.nodeId} registering as gateway for ${blockchainId}`);
+		console.log(`Node ${this.nodeId} registering as gateway for ${blockchainId}${pubKey ? ` with pubKey: ${pubKey.substring(0, 20)}` : ''}`);
 		
 		const gatewayInfo = new GatewayInfo(
 			blockchainId,
 			this.nodeId,
 			endpoint,
-			supportedProtocols
+			pubKey
 		);
 
 		this.registeredGateways.set(blockchainId, gatewayInfo);
@@ -1024,10 +1024,10 @@ class KademliaNode extends AbstractNode {
 		return gateways;
 	}
 
-	public startGatewayHeartbeat(blockchainId: string, endpoint: string, interval: number = 300000): void {
+	public startGatewayHeartbeat(blockchainId: string, endpoint: string, pubKey?: string, interval: number = 300000): void {
 		this.gatewayHeartbeat = setInterval(async () => {
 		console.log(`Refreshing gateway registration for ${blockchainId}`);
-		await this.registerAsGateway(blockchainId, endpoint);
+		await this.registerAsGateway(blockchainId, endpoint, pubKey);
 		}, interval);
 	}
 
@@ -1555,15 +1555,15 @@ class KademliaNode extends AbstractNode {
 	public async registerAsGatewaySecure(
 		blockchainId: string,
 		endpoint: string,
-		supportedProtocols: string[] = ['SATP']
+		pubKey?: string
 	): Promise<GatewayInfo> {
-		console.log(`Node ${this.nodeId} registering as gateway for ${blockchainId} (SECURE)`);
+		console.log(`Node ${this.nodeId} registering as gateway for ${blockchainId} (SECURE)${pubKey ? ` with pubKey: ${pubKey.substring(0, 20)}...` : ''}`);
 		
 		const gatewayInfo = new GatewayInfo(
 			blockchainId,
 			this.nodeId,
 			endpoint,
-			supportedProtocols
+			pubKey
 		);
 
 		// Store using secure method

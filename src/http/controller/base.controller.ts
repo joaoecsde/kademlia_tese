@@ -202,18 +202,18 @@ class BaseController {
 	
 	public storeGateway = async (req: Request, res: Response, next: NextFunction) => {
 		try {
-			const { blockchainId, endpoint, supportedProtocols = ['SATP'], performHealthCheck = true } = req.body;
+			const { blockchainId, endpoint, pubKey, performHealthCheck = true } = req.body;
 			
 			// Enhanced validation
 			if (!blockchainId || !endpoint) {
 				return res.status(400).json({
 					success: false,
 					error: 'Missing required fields: blockchainId and endpoint are required',
-					received: { blockchainId, endpoint, supportedProtocols }
+					received: { blockchainId, endpoint, pubKey }
 				});
 			}
 
-			console.log(`API: Storing gateway ${blockchainId} -> ${endpoint}`);
+			console.log(`API: Storing gateway ${blockchainId} -> ${endpoint}${pubKey ? ` with pubKey: ${pubKey.substring(0, 20)}...` : ''}`);
 
 			// Create and validate gateway info
 			let gatewayInfo: GatewayInfo;
@@ -222,13 +222,13 @@ class BaseController {
 					blockchainId,
 					this.node.nodeId,
 					endpoint,
-					Array.isArray(supportedProtocols) ? supportedProtocols : [supportedProtocols]
+					pubKey
 				);
 			} catch (validationError) {
 				return res.status(400).json({
 					success: false,
 					error: `Gateway validation failed: ${validationError.message}`,
-					details: { blockchainId, endpoint, supportedProtocols }
+					details: { blockchainId, endpoint, pubKey }
 				});
 			}
 
@@ -278,7 +278,7 @@ class BaseController {
 				},
 				nodeInfo: {
 					kademliaNodeId: this.node.nodeId,
-					httpPort: 2000 + this.node.nodeId, // Fixed: HTTP port is 2000 + nodeId
+					httpPort: 2000 + this.node.nodeId,
 					udpPort: this.node.port
 				},
 				nextSteps: {
@@ -301,20 +301,10 @@ class BaseController {
 	public storeGatewaySimple = async (req: Request, res: Response, next: NextFunction) => {
 		try {
 			const { blockchainId, endpoint } = req.params;
-			const { protocols, healthCheck = 'true' } = req.query;
-			
-			
-			let supportedProtocols = ['SATP']; // default
-			if (protocols) {
-				supportedProtocols = typeof protocols === 'string' 
-					? protocols.split(',').map(p => p.trim()).filter(p => p.length > 0)
-					: Array.isArray(protocols) 
-						? protocols.map(p => String(p).trim()).filter(p => p.length > 0)
-						: ['SATP'];
-			}
+			const { pubKey, healthCheck = 'true' } = req.query;
 			
 			const decodedEndpoint = decodeURIComponent(endpoint);
-			console.log(`API: Storing gateway via GET ${blockchainId} -> ${decodedEndpoint}`);
+			console.log(`API: Storing gateway via GET ${blockchainId} -> ${decodedEndpoint}${pubKey ? ` with pubKey: ${String(pubKey).substring(0, 20)}` : ''}`);
 			
 			// Create and validate gateway info
 			let gatewayInfo: GatewayInfo;
@@ -323,7 +313,7 @@ class BaseController {
 					blockchainId,
 					this.node.nodeId, 
 					decodedEndpoint,
-					supportedProtocols
+					pubKey as string
 				);
 			} catch (validationError) {
 				return res.status(400).json({
@@ -331,7 +321,8 @@ class BaseController {
 					error: `Gateway validation failed: ${validationError.message}`,
 					originalEndpoint: endpoint,
 					decodedEndpoint,
-					example: 'Use: /storeGateway/hardhat1/http%3A%2F%2Flocalhost%3A8545'
+					pubKey,
+					example: 'Use: /storeGateway/hardhat1/http%3A%2F%2Flocalhost%3A8545?pubKey=yourPubKey'
 				});
 			}
 
@@ -1004,17 +995,17 @@ class BaseController {
 
 	public storeGatewaySecure = async (req: Request, res: Response, next: NextFunction) => {
 		try {
-			const { blockchainId, endpoint, supportedProtocols = ['SATP'], performHealthCheck = true } = req.body;
+			const { blockchainId, endpoint, pubKey, performHealthCheck = true } = req.body;
 			
 			if (!blockchainId || !endpoint) {
 				return res.status(400).json({
 					success: false,
 					error: 'Missing required fields: blockchainId and endpoint are required',
-					received: { blockchainId, endpoint, supportedProtocols }
+					received: { blockchainId, endpoint, pubKey }
 				});
 			}
 
-			console.log(`API: Secure storing gateway ${blockchainId} -> ${endpoint}`);
+			console.log(`API: Secure storing gateway ${blockchainId} -> ${endpoint}${pubKey ? ` with pubKey: ${pubKey.substring(0, 20)}...` : ''}`);
 
 			// Create and validate gateway info
 			let gatewayInfo: GatewayInfo;
@@ -1023,13 +1014,13 @@ class BaseController {
 					blockchainId,
 					this.node.nodeId,
 					endpoint,
-					Array.isArray(supportedProtocols) ? supportedProtocols : [supportedProtocols]
+					pubKey
 				);
 			} catch (validationError) {
 				return res.status(400).json({
 					success: false,
 					error: `Gateway validation failed: ${validationError.message}`,
-					details: { blockchainId, endpoint, supportedProtocols }
+					details: { blockchainId, endpoint, pubKey }
 				});
 			}
 
@@ -1090,19 +1081,10 @@ class BaseController {
 	public storeGatewaySimpleSecure = async (req: Request, res: Response, next: NextFunction) => {
 		try {
 			const { blockchainId, endpoint } = req.params;
-			const { protocols, healthCheck = 'true' } = req.query;
-			
-			let supportedProtocols = ['SATP'];
-			if (protocols) {
-				supportedProtocols = typeof protocols === 'string' 
-					? protocols.split(',').map(p => p.trim()).filter(p => p.length > 0)
-					: Array.isArray(protocols) 
-						? protocols.map(p => String(p).trim()).filter(p => p.length > 0)
-						: ['SATP'];
-			}
+			const { pubKey, healthCheck = 'true' } = req.query;
 			
 			const decodedEndpoint = decodeURIComponent(endpoint);
-			console.log(`API: Secure storing gateway via GET ${blockchainId} -> ${decodedEndpoint}`);
+			console.log(`API: Secure storing gateway via GET ${blockchainId} -> ${decodedEndpoint}${pubKey ? ` with pubKey: ${String(pubKey).substring(0, 20)}...` : ''}`);
 			
 			// Create and validate gateway info
 			let gatewayInfo: GatewayInfo;
@@ -1111,7 +1093,7 @@ class BaseController {
 					blockchainId,
 					this.node.nodeId, 
 					decodedEndpoint,
-					supportedProtocols
+					pubKey as string
 				);
 			} catch (validationError) {
 				return res.status(400).json({
@@ -1119,7 +1101,8 @@ class BaseController {
 					error: `Gateway validation failed: ${validationError.message}`,
 					originalEndpoint: endpoint,
 					decodedEndpoint,
-					example: 'Use: /secure/storeGateway/hardhat1/http%3A%2F%2Flocalhost%3A8545'
+					pubKey,
+					example: 'Use: /secure/storeGateway/hardhat1/http%3A%2F%2Flocalhost%3A8545?pubKey=yourPubKey'
 				});
 			}
 

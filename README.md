@@ -111,16 +111,13 @@ curl -X POST http://localhost:2001/storeGateway \
   -d '{
     "blockchainId": "hardhat1",
     "endpoint": "http://localhost:8545",
-    "supportedProtocols": ["SATP", "ILP"]
+    "pubKey": "04a1b2c3d4e5f6"
   }'
 ```
 
 **Store Gateway (GET Method - Simple)**
 ```bash
 GET http://localhost:2001/storeGateway/hardhat1/http%3A%2F%2Flocalhost%3A8545
-
-# With custom protocols
-GET http://localhost:2001/storeGateway/hardhat1/http%3A%2F%2Flocalhost%3A8545?protocols=SATP,ILP
 ```
 
 #### Gateway Discovery
@@ -224,16 +221,13 @@ curl -X POST http://localhost:2001/secure/storeGateway \
   -d '{
     "blockchainId": "hardhat1",
     "endpoint": "http://localhost:8545",
-    "supportedProtocols": ["SATP", "ILP"]
+    "pubKey": "04a1b2c3d4e5f6"
   }'
 ```
 
 **Secure Gateway Store (GET Method)**
 ```bash
 GET http://localhost:2001/secure/storeGateway/hardhat1/http%3A%2F%2Flocalhost%3A8545
-
-# With custom protocols
-GET http://localhost:2001/secure/storeGateway/hardhat1/http%3A%2F%2Flocalhost%3A8545?protocols=SATP,ILP
 ```
 
 **Find Gateways (Secure)**

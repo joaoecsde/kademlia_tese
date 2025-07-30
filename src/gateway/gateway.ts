@@ -2,19 +2,19 @@ export interface IGatewayInfo {
   blockchainId: string;
   nodeId: number;
   endpoint: string;
-  supportedProtocols: string[];
   timestamp: number;
-  chainId?: number; // Add chain ID for validation
-  isHealthy?: boolean; // Add health status
-  lastHealthCheck?: number; // Add health check timestamp
+  pubKey?: string;
+  chainId?: number;
+  isHealthy?: boolean;
+  lastHealthCheck?: number;
 }
 
 export class GatewayInfo implements IGatewayInfo {
   blockchainId: string;
   nodeId: number;
   endpoint: string;
-  supportedProtocols: string[];
   timestamp: number;
+  pubKey?: string;
   chainId?: number;
   isHealthy?: boolean;
   lastHealthCheck?: number;
@@ -23,12 +23,12 @@ export class GatewayInfo implements IGatewayInfo {
     blockchainId: string,
     nodeId: number,
     endpoint: string,
-    supportedProtocols: string[] = ['SATP']
+    pubKey?: string
   ) {
     this.blockchainId = blockchainId;
     this.nodeId = nodeId;
     this.endpoint = this.validateAndNormalizeEndpoint(endpoint);
-    this.supportedProtocols = this.validateProtocols(supportedProtocols);
+    this.pubKey = pubKey;
     this.timestamp = Date.now();
   }
 
@@ -43,19 +43,6 @@ export class GatewayInfo implements IGatewayInfo {
     } catch (error) {
       throw new Error(`Invalid endpoint URL: ${endpoint}. Must be a valid HTTP/HTTPS URL.`);
     }
-  }
-
-  private validateProtocols(protocols: string[]): string[] {
-    const validProtocols = ['SATP', 'ILP', 'HTLC', 'ATOMIC_SWAP'];
-    const validated = protocols.filter(p => 
-      typeof p === 'string' && p.trim().length > 0
-    ).map(p => p.trim().toUpperCase());
-    
-    if (validated.length === 0) {
-      return ['SATP']; // Default fallback
-    }
-    
-    return validated;
   }
 
   // Check if gateway is still fresh (less than 1 hour old)
@@ -95,7 +82,7 @@ export class GatewayInfo implements IGatewayInfo {
       blockchainId: this.blockchainId,
       nodeId: this.nodeId,
       endpoint: this.endpoint,
-      supportedProtocols: this.supportedProtocols,
+      pubKey: this.pubKey,
       timestamp: this.timestamp,
       chainId: this.chainId,
       isHealthy: this.isHealthy,
@@ -115,7 +102,7 @@ export class GatewayInfo implements IGatewayInfo {
         parsed.blockchainId,
         parsed.nodeId,
         parsed.endpoint,
-        parsed.supportedProtocols || ['SATP']
+        parsed.pubKey
       );
       
       // Restore optional fields
@@ -136,7 +123,7 @@ export class GatewayInfo implements IGatewayInfo {
       blockchainId: this.blockchainId,
       nodeId: this.nodeId,
       endpoint: this.endpoint,
-      supportedProtocols: this.supportedProtocols,
+      pubKey: this.pubKey,
       timestamp: this.timestamp,
       age: this.getAge(),
       isFresh: this.isFresh(),
