@@ -115,9 +115,14 @@ curl -X POST http://localhost:2001/storeGateway \
   }'
 ```
 
-**Store Gateway (GET Method - Simple)**
+**Store Gateway (GET Method)**
 ```bash
 GET http://localhost:2001/storeGateway/hardhat1/http%3A%2F%2Flocalhost%3A8545
+```
+
+**Store Gateway (GET Method) with pubKey**
+```bash
+GET http://localhost:2001/storeGateway/hardhat1/http%3A%2F%2Flocalhost%3A8545?pubKey=04a1b2c3d4e5f6
 ```
 
 #### Gateway Discovery
@@ -297,50 +302,6 @@ curl "http://localhost:2001/secure/gateway/hardhat1/health"
 
 # 6. List all secure gateways
 curl "http://localhost:2001/secure/gateways"
-```
-
-### Multiple Blockchain Gateways
-
-```bash
-# Store different blockchain gateways
-curl -X POST http://localhost:2001/storeGateway -H "Content-Type: application/json" \
-  -d '{"blockchainId": "ethereum", "endpoint": "https://mainnet.infura.io/v3/your-key"}'
-
-curl -X POST http://localhost:2002/storeGateway -H "Content-Type: application/json" \
-  -d '{"blockchainId": "polygon", "endpoint": "https://polygon-rpc.com"}'
-
-curl -X POST http://localhost:2003/storeGateway -H "Content-Type: application/json" \
-  -d '{"blockchainId": "avalanche", "endpoint": "https://api.avax.network/ext/bc/C/rpc"}'
-
-# Find any gateway from any node
-curl "http://localhost:2001/findGateway/ethereum"
-curl "http://localhost:2004/findGateway/polygon"
-curl "http://localhost:2005/findGateway/avalanche"
-```
-
-### Secure Network Setup
-
-```bash
-# 1. Check network crypto status
-curl "http://localhost:2001/crypto/network-status"
-
-# 2. Enable encryption on all nodes (by default they are true)
-curl "http://localhost:2001/crypto/encryption/true"
-curl "http://localhost:2002/crypto/encryption/true"
-curl "http://localhost:2003/crypto/encryption/true"
-
-# 3. Trigger key exchange on all nodes
-curl -X POST "http://localhost:2001/crypto/discover"
-curl -X POST "http://localhost:2002/crypto/discover"
-curl -X POST "http://localhost:2003/crypto/discover"
-
-# 4. Verify encryption coverage
-curl "http://localhost:2001/crypto/network-status"
-
-# 5. Test secure operations
-curl "http://localhost:2001/secure/store/mySecretData"
-curl "http://localhost:2002/findValue/mySecretData"
-curl "http://localhost:2001/secure/ping/2/3002"
 ```
 
 ## Testing
