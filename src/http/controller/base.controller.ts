@@ -594,269 +594,189 @@ class BaseController {
 		}
   };
 
-  public getKnownKeys = async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const knownKeys = this.node.getKnownPublicKeys();
-      return res.json({
-        nodeId: this.node.nodeId,
-        totalKeys: knownKeys.length,
-        keys: knownKeys,
-        timestamp: Date.now()
-      });
-    } catch (error) {
-      next(error);
-    }
-  };
-
-  public getCryptoStats = async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const stats = this.node.getCryptoStats();
-      return res.json({
-        nodeId: this.node.nodeId,
-        ...stats,
-        timestamp: Date.now()
-      });
-    } catch (error) {
-      next(error);
-    }
-  };
-
-  public setEncryption = async (req: Request, res: Response, next: NextFunction) => {
-	try {
-		const { enabled } = req.params; // true/false from URL
-		
-		if (enabled !== 'true' && enabled !== 'false') {
-		return res.status(400).json({
-			success: false,
-			error: 'enabled must be "true" or "false"',
-			example: 'Use: /crypto/encryption/true or /crypto/encryption/false'
+	public getKnownKeys = async (req: Request, res: Response, next: NextFunction) => {
+		try {
+		const knownKeys = this.node.getKnownPublicKeys();
+		return res.json({
+			nodeId: this.node.nodeId,
+			totalKeys: knownKeys.length,
+			keys: knownKeys,
+			timestamp: Date.now()
 		});
+		} catch (error) {
+		next(error);
 		}
+	};
 
-		const enabledBool = enabled === 'true';
-		this.node.setEncryptionEnabled(enabledBool);
+	public getCryptoStats = async (req: Request, res: Response, next: NextFunction) => {
+		try {
+		const stats = this.node.getCryptoStats();
+		return res.json({
+			nodeId: this.node.nodeId,
+			...stats,
+			timestamp: Date.now()
+		});
+		} catch (error) {
+		next(error);
+		}
+	};
+
+	public setEncryption = async (req: Request, res: Response, next: NextFunction) => {
+		try {
+			const { enabled } = req.params; // true/false from URL
+			
+			if (enabled !== 'true' && enabled !== 'false') {
+			return res.status(400).json({
+				success: false,
+				error: 'enabled must be "true" or "false"',
+				example: 'Use: /crypto/encryption/true or /crypto/encryption/false'
+			});
+			}
+
+			const enabledBool = enabled === 'true';
+			this.node.setEncryptionEnabled(enabledBool);
+			
+			return res.json({
+			success: true,
+			message: `Encryption ${enabledBool ? 'enabled' : 'disabled'}`,
+			encryptionEnabled: enabledBool,
+			nodeId: this.node.nodeId,
+			timestamp: Date.now()
+			});
+		} catch (error) {
+			next(error);
+		}
+	};
+
+	public discoverKeys = async (req: Request, res: Response, next: NextFunction) => {
+		try {
+		const allPeers = this.node.table.getAllPeers();
+		const peerNodes = allPeers.map(peer => ({
+			nodeId: peer.nodeId,
+			address: peer.address,
+			port: peer.port
+		}));
+
+		await this.node.getKeyDiscoveryManager().discoverKeys(peerNodes);
+		
+		const discoveredKeys = this.node.getKnownPublicKeys();
 		
 		return res.json({
-		success: true,
-		message: `Encryption ${enabledBool ? 'enabled' : 'disabled'}`,
-		encryptionEnabled: enabledBool,
-		nodeId: this.node.nodeId,
-		timestamp: Date.now()
+			success: true,
+			message: `Key discovery completed`,
+			totalPeers: peerNodes.length,
+			discoveredKeys: discoveredKeys.length,
+			keys: discoveredKeys,
+			timestamp: Date.now()
 		});
-	} catch (error) {
+		} catch (error) {
 		next(error);
-	}
-  };
+		}
+	};
 
-  public discoverKeys = async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const allPeers = this.node.table.getAllPeers();
-      const peerNodes = allPeers.map(peer => ({
-        nodeId: peer.nodeId,
-        address: peer.address,
-        port: peer.port
-      }));
-
-      await this.node.getKeyDiscoveryManager().discoverKeys(peerNodes);
-      
-      const discoveredKeys = this.node.getKnownPublicKeys();
-      
-      return res.json({
-        success: true,
-        message: `Key discovery completed`,
-        totalPeers: peerNodes.length,
-        discoveredKeys: discoveredKeys.length,
-        keys: discoveredKeys,
-        timestamp: Date.now()
-      });
-    } catch (error) {
-      next(error);
-    }
-  };
-
-  public exportKeys = async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const backup = this.node.exportKeys();
-      
-      return res.json({
-        success: true,
-        nodeId: this.node.nodeId,
-        backup,
-        message: 'Keys exported successfully',
-        timestamp: Date.now()
-      });
-    } catch (error) {
-      next(error);
-    }
-  };
-
-  public importKeys = async (req: Request, res: Response, next: NextFunction) => {
-	try {
-		// For testing, we'll create a simple test key import
-		// In production, you'd want this as POST with proper validation
+	public exportKeys = async (req: Request, res: Response, next: NextFunction) => {
+		try {
+		const backup = this.node.exportKeys();
 		
 		return res.json({
-		message: 'Key import endpoint available',
-		note: 'For security, use POST method with proper backup data',
-		example: 'POST /crypto/import with backup data in body',
-		currentKeys: this.node.getKnownPublicKeys().length,
-		timestamp: Date.now()
+			success: true,
+			nodeId: this.node.nodeId,
+			backup,
+			message: 'Keys exported successfully',
+			timestamp: Date.now()
 		});
-	} catch (error) {
+		} catch (error) {
 		next(error);
-	}
-  };
+		}
+	};
+
+	public importKeys = async (req: Request, res: Response, next: NextFunction) => {
+		try {
+			// For testing, we'll create a simple test key import
+			// In production, you'd want this as POST with proper validation
+			
+			return res.json({
+			message: 'Key import endpoint available',
+			note: 'For security, use POST method with proper backup data',
+			example: 'POST /crypto/import with backup data in body',
+			currentKeys: this.node.getKnownPublicKeys().length,
+			timestamp: Date.now()
+			});
+		} catch (error) {
+			next(error);
+		}
+	};
 
   // === SECURE DHT OPERATIONS ===
 
-  public secureStore = async (req: Request, res: Response, next: NextFunction) => {
-	try {
-		const { value } = req.params; // Only value, no key parameter
-		
-		if (!value) {
-		return res.status(400).json({
-			success: false,
-			error: 'value is required',
-			example: 'Use: /secure/store/mySecretData (not /secure/store/key/value)'
-		});
-		}
-
-		const decodedValue = decodeURIComponent(value);
-		
-		// Generate key the same way as regular store (hash the value)
-		const key = hashKeyAndmapToKeyspace(decodedValue);
-		
-		console.log(`Secure store: "${decodedValue}" -> key ${key}`);
-		
-		const results = await this.node.secureStore(key, decodedValue);
-		const successful = results.filter(r => r.status === 'fulfilled').length;
-		
-		return res.json({
-		success: true,
-		message: `Secure store completed on ${successful} nodes`,
-		value: decodedValue,
-		generatedKey: key,
-		encrypted: this.node.isEncryptionEnabled(),
-		results: successful,
-		nodeId: this.node.nodeId,
-		howToFind: `Use: /findValue/${encodeURIComponent(decodedValue)}`,
-		timestamp: Date.now()
-		});
-	} catch (error) {
-		next(error);
-	}
-  };
-
-  public securePing = async (req: Request, res: Response, next: NextFunction) => {
+	public secureStore = async (req: Request, res: Response, next: NextFunction) => {
 		try {
-		const { nodeId, port } = req.params;
-		const address = req.query.address || '127.0.0.1'; // Default to localhost
-		
-		if (!nodeId || !port) {
-		return res.status(400).json({
-			success: false,
-			error: 'nodeId and port are required',
-			example: 'Use: /secure/ping/1/3001 or /secure/ping/1/3001?address=192.168.1.100'
-		});
+			const { value } = req.params; // Only value, no key parameter
+			
+			if (!value) {
+			return res.status(400).json({
+				success: false,
+				error: 'value is required',
+				example: 'Use: /secure/store/mySecretData (not /secure/store/key/value)'
+			});
+			}
+
+			const decodedValue = decodeURIComponent(value);
+			
+			// Generate key the same way as regular store (hash the value)
+			const key = hashKeyAndmapToKeyspace(decodedValue);
+			
+			console.log(`Secure store: "${decodedValue}" -> key ${key}`);
+			
+			const results = await this.node.secureStore(key, decodedValue);
+			const successful = results.filter(r => r.status === 'fulfilled').length;
+			
+			return res.json({
+			success: true,
+			message: `Secure store completed on ${successful} nodes`,
+			value: decodedValue,
+			generatedKey: key,
+			encrypted: this.node.isEncryptionEnabled(),
+			results: successful,
+			nodeId: this.node.nodeId,
+			howToFind: `Use: /findValue/${encodeURIComponent(decodedValue)}`,
+			timestamp: Date.now()
+			});
+		} catch (error) {
+			next(error);
 		}
+	};
 
-		const result = await this.node.securePing(Number(nodeId), String(address), Number(port));
-		
-		return res.json({
-		success: result,
-		message: result ? 'Secure ping successful' : 'Secure ping failed',
-		target: { 
-			nodeId: Number(nodeId), 
-			address: String(address), 
-			port: Number(port) 
-		},
-		encryptionEnabled: this.node.isEncryptionEnabled(),
-		timestamp: Date.now()
-		});
-	} catch (error) {
+  	public securePing = async (req: Request, res: Response, next: NextFunction) => {
+		try {
+			const { nodeId, port } = req.params;
+			const address = req.query.address || '127.0.0.1'; // Default to localhost
+			
+			if (!nodeId || !port) {
+			return res.status(400).json({
+				success: false,
+				error: 'nodeId and port are required',
+				example: 'Use: /secure/ping/1/3001 or /secure/ping/1/3001?address=192.168.1.100'
+			});
+			}
+
+			const result = await this.node.securePing(Number(nodeId), String(address), Number(port));
+			
+			return res.json({
+			success: result,
+			message: result ? 'Secure ping successful' : 'Secure ping failed',
+			target: { 
+				nodeId: Number(nodeId), 
+				address: String(address), 
+				port: Number(port) 
+			},
+			encryptionEnabled: this.node.isEncryptionEnabled(),
+			timestamp: Date.now()
+			});
+		} catch (error) {
 		next(error);
-	}
-  };
-
-  // === TESTING ENDPOINTS ===
-
-  public testEncryption = async (req: Request, res: Response, next: NextFunction) => {
-    try {
-    const { targetNodeId, testData = "Hello, encrypted world!" } = req.body;
-    
-    if (!targetNodeId) {
-      return res.status(400).json({
-        success: false,
-        error: 'targetNodeId is required'
-      });
-    }
-
-    // First check if we have the key
-    const targetKey = this.node.getCryptoManager().getStoredPublicKey(Number(targetNodeId));
-    
-    if (!targetKey) {
-      // Try to get the key first
-      const allPeers = this.node.table.getAllPeers();
-      const targetPeer = allPeers.find(p => p.nodeId === Number(targetNodeId));
-      
-      if (!targetPeer) {
-        return res.status(404).json({
-          success: false,
-          error: `Node ${targetNodeId} not found in routing table`,
-          availableNodes: allPeers.map(p => p.nodeId),
-          suggestion: 'Try pinging the node first or trigger key discovery'
-        });
-      }
-
-      // Try to discover the key
-      try {
-        await this.node.requestPeerKey(Number(targetNodeId));
-        
-        // Check again after discovery attempt
-        const keyAfterDiscovery = this.node.getCryptoManager().getStoredPublicKey(Number(targetNodeId));
-        if (!keyAfterDiscovery) {
-          return res.status(400).json({
-            success: false,
-            error: `No public key found for node ${targetNodeId}. Key discovery failed.`,
-            suggestion: 'Try: curl -X POST http://localhost:' + (this.node.nodeId + 2000) + '/crypto/discover',
-            availableKeys: this.node.getKnownPublicKeys().map(k => k.nodeId)
-          });
-        }
-      } catch (discoveryError) {
-        return res.status(400).json({
-          success: false,
-          error: `Failed to discover key for node ${targetNodeId}: ${discoveryError.message}`,
-          suggestion: 'Try manual key discovery or check if the target node is online'
-        });
-      }
-    }
-
-    // Now try encryption test
-    try {
-      const finalKey = this.node.getCryptoManager().getStoredPublicKey(Number(targetNodeId));
-      const encrypted = this.node.getCryptoManager().encrypt(testData, finalKey);
-      const signature = this.node.getCryptoManager().sign(testData);
-      
-      return res.json({
-        success: true,
-        message: 'Encryption test successful',
-        testData,
-        encrypted: encrypted.substring(0, 100) + '...', 
-        signature: signature.substring(0, 100) + '...', 
-        targetNodeId: Number(targetNodeId),
-        encryptionMethod: encrypted.length > 200 ? 'RSA' : 'Hybrid RSA+AES',
-        timestamp: Date.now()
-      });
-    } catch (cryptoError) {
-      return res.status(500).json({
-        success: false,
-        error: `Encryption test failed: ${cryptoError.message}`
-      });
-    }
-  } catch (error) {
-    next(error);
-  }
-  };
+		}
+  	};
 
 	public networkCryptoStatus = async (req: Request, res: Response, next: NextFunction) => {
 		try {
