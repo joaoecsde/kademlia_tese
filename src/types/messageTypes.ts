@@ -1,3 +1,4 @@
+import { SecureMessagePayload } from '../crypto/secureMessage';
 import { Message } from "../message/message";
 
 export interface Queue<T> {
@@ -47,6 +48,12 @@ export enum MessageType {
 	RegisterGateway = "REGISTER_GATEWAY",
   	FindGateway = "FIND_GATEWAY",
   	GatewayResponse = "GATEWAY_RESPONSE",
+
+	// New secure types
+	KeyExchange = "KEY_EXCHANGE",
+	KeyDiscovery = "KEY_DISCOVERY",
+	KeyResponse = "KEY_RESPONSE",
+	SecureHandshake = "SECURE_HANDSHAKE"
 }
 
 export enum PacketType {
@@ -55,3 +62,35 @@ export enum PacketType {
 	HandShake = "handshake",
 	Message = "message",
 }
+
+export interface KeyExchangeData {
+  nodeId: number;
+  publicKey: string;
+  timestamp: number;
+  requestType: 'offer' | 'request' | 'response';
+}
+
+export interface SecureUDPDataInfo {
+  resId?: string;
+  closestNodes?: any[];
+  key?: number;
+  value?: string;
+  blockchainId?: string;
+  gateways?: any[];
+  // Encryption fields
+  encrypted?: boolean;
+  securePayload?: SecureMessagePayload;
+  // Key exchange fields
+  keyExchange?: KeyExchangeData;
+}
+
+export interface SecureMessagePayloadWrapper<T = any> {
+  originalType: MessageType;
+  securePayload: SecureMessagePayload;
+  metadata: {
+    senderNodeId: number;
+    timestamp: number;
+    messageId: string;
+  };
+}
+

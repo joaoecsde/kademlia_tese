@@ -57,7 +57,6 @@ export class KBucket {
 		}
 		try {
 			if (this.node.nodeContact.nodeId === this.nodes.reverse()[0].nodeId) return;
-			// try check if node is only lone if not remove its id from the nodes arr
 
 			const to = this.nodes.reverse()[0].toJSON();
 			const data = { resId: v4() };
