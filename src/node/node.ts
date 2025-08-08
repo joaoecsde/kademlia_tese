@@ -13,7 +13,7 @@ import RoutingTable from "../routingTable/routingTable";
 import WebSocketTransport from "../transports/tcp/wsTransport";
 import UDPTransport from "../transports/udp/udpTransport";
 import { MessageType, PacketType, Transports } from "../types/messageTypes";
-import { BroadcastData, DirectData, TcpPacket } from "../types/udpTransportTypes";
+import { BroadcastData, DirectData } from "../types/udpTransportTypes";
 import { extractError } from "../utils/extractError";
 import { chunk, hashKeyAndmapToKeyspace, XOR } from "../utils/nodeUtils";
 import AbstractNode from "./abstractNode/abstractNode";
@@ -766,12 +766,6 @@ class KademliaNode extends AbstractNode {
 			default:
 				this.log.error("No messages for this transport or type");
 		}
-	};
-
-	protected createTcpMessage = <T extends BroadcastData | DirectData>(to: PeerJSON, type: MessageType, payload: any) => {
-		const from = this.nodeContact.toJSON();
-		const packet = NodeUtils.buildPacket<T>(type, payload);
-		return Message.create<TcpPacket<T>>(to, from, Transports.Tcp, packet, type);
 	};
 
 	public handleBroadcastMessage = async () => {
