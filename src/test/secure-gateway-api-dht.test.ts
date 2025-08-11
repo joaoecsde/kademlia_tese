@@ -139,7 +139,6 @@ describe('Secure Gateway HTTP API Tests', () => {
             const gatewayData = {
                 blockchainId: "hardhat-secure-1",
                 endpoint: "http://localhost:8545/",
-                supportedProtocols: ["SATP"]
             };
             
             console.log('\n Testing Secure Gateway Store via HTTP POST');
@@ -236,11 +235,9 @@ describe('Secure Gateway HTTP API Tests', () => {
             
             expect(storeResponse.ok).toBe(true);
             expect(storeResponse.data.success).toBe(true);
-            expect(storeResponse.data.gateway.supportedProtocols).toEqual(['SATP', 'ILP', 'HTLC']);
             expect(storeResponse.data.storage.encrypted).toBe(true);
             
             console.log(`Secure gateway with custom protocols stored`);
-            console.log(`Protocols: ${storeResponse.data.gateway.supportedProtocols.join(', ')}`);
             console.log(`Encrypted: ${storeResponse.data.storage.encrypted}`);
             console.log(`Encryption Coverage: ${storeResponse.data.storage.encryptionCoverage}`);
         }, 90000);

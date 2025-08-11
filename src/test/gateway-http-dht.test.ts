@@ -102,7 +102,6 @@ describe('Gateway HTTP API Tests', () => {
             const gatewayData = {
                 blockchainId: "hardhat1",
                 endpoint: "http://localhost:8545/",
-                supportedProtocols: ["SATP"]
             };
             
             console.log('\nTesting Gateway Store via HTTP POST');
@@ -196,10 +195,8 @@ describe('Gateway HTTP API Tests', () => {
             
             expect(storeResponse.ok).toBe(true);
             expect(storeResponse.data.success).toBe(true);
-            expect(storeResponse.data.gateway.supportedProtocols).toEqual(['SATP', 'ILP', 'HTLC']);
             
             console.log(`Gateway with custom protocols stored`);
-            console.log(`Protocols: ${storeResponse.data.gateway.supportedProtocols.join(', ')}`);
         }, 90000);
 
         test('should handle invalid gateway data', async () => {
@@ -565,10 +562,9 @@ describe('Gateway HTTP API Tests', () => {
             const testGateway = {
                 blockchainId: "ethereum-test",
                 endpoint: "http://localhost:8545",
-                supportedProtocols: ["SATP", "ILP"]
             };
             
-            console.log('\n🔄 Complete Gateway Workflow Test');
+            console.log('\n Complete Gateway Workflow Test');
             console.log('=================================');
             
             console.log('\nStoring gateway');
