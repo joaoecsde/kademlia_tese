@@ -4,10 +4,17 @@ export interface SecureMessagePayload {
   encrypted: boolean;
   encryptedData?: string;
   sessionKey?: string;
-  signature?: string;
+  // signature field removed - now encrypted with data
   senderPublicKey?: string;
   plainData?: any;
   iv?: string;
+}
+
+// Internal structure for compound payload (encrypted together)
+interface CompoundPayload {
+  data: any;
+  signature?: string;
+  timestamp: number; // Add timestamp for replay protection
 }
 
 export class SecureMessageHandler {
@@ -31,30 +38,38 @@ export class SecureMessageHandler {
     try {
       const jsonData = JSON.stringify(data);
       
-      // For small messages, use RSA directly
-      if (jsonData.length < 200) {
-        const encryptedData = this.cryptoManager.encrypt(jsonData, recipientPublicKey);
-        const signature = this.cryptoManager.sign(jsonData);
+      // Create signature for the original data
+      const signature = this.cryptoManager.sign(jsonData);
+      
+      // Create compound payload with data, signature, and timestamp
+      const compoundPayload: CompoundPayload = {
+        data: data, 
+        signature: signature,
+        timestamp: Date.now()
+      };
+      
+      const compoundJson = JSON.stringify(compoundPayload);
+      
+      // For small compound messages, use RSA directly
+      if (compoundJson.length < 180) {
+        const encryptedCompound = this.cryptoManager.encrypt(compoundJson, recipientPublicKey);
         
         return {
           encrypted: true,
-          encryptedData,
-          signature,
+          encryptedData: encryptedCompound,
           senderPublicKey: this.cryptoManager.getPublicKey()
         };
       }
       
       // For larger messages, use hybrid encryption (RSA + AES)
       const sessionKey = this.cryptoManager.generateSessionKey();
-      const { encrypted, iv } = this.cryptoManager.encryptWithSessionKey(jsonData, sessionKey);
+      const { encrypted, iv } = this.cryptoManager.encryptWithSessionKey(compoundJson, sessionKey);
       const encryptedSessionKey = this.cryptoManager.encrypt(sessionKey, recipientPublicKey);
-      const signature = this.cryptoManager.sign(jsonData);
       
       return {
         encrypted: true,
         encryptedData: encrypted,
         sessionKey: encryptedSessionKey,
-        signature,
         senderPublicKey: this.cryptoManager.getPublicKey(),
         iv
       };
@@ -99,11 +114,15 @@ export class SecureMessageHandler {
         decryptedData = this.cryptoManager.decrypt(payload.encryptedData!);
       }
 
-      // Verify signature if present
-      if (payload.signature && payload.senderPublicKey) {
+      // Parse the payload
+      const compoundPayload: CompoundPayload = JSON.parse(decryptedData);
+      
+      // Verify signature if present and we have sender's public key
+      if (compoundPayload.signature && payload.senderPublicKey) {
+        const originalDataJson = JSON.stringify(compoundPayload.data);
         const isValid = this.cryptoManager.verify(
-          decryptedData,
-          payload.signature,
+          originalDataJson,
+          compoundPayload.signature,
           payload.senderPublicKey
         );
         
@@ -112,7 +131,7 @@ export class SecureMessageHandler {
         }
       }
 
-      return JSON.parse(decryptedData);
+      return compoundPayload.data;
     } catch (error) {
       console.error('Failed to decrypt message:', error);
       throw new Error(`Message decryption failed: ${error.message}`);

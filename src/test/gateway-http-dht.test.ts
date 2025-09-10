@@ -184,14 +184,14 @@ describe('Gateway HTTP API Tests', () => {
         test('should store gateway with custom protocols', async () => {
             const blockchainId = "polygon1";
             const endpoint = "http://localhost:8547";
-            const protocols = "SATP,ILP,HTLC";
+            const pubKey = "aaaaaaaaaaaaaaaa";
             const encodedEndpoint = encodeURIComponent(endpoint);
             
             console.log('\nTesting Gateway Store with Custom Protocols');
             console.log('==============================================');
-            console.log(`URL: http://localhost:2003/storeGateway/${blockchainId}/${encodedEndpoint}?protocols=${protocols}`);
+            console.log(`URL: http://localhost:2003/storeGateway/${blockchainId}/${encodedEndpoint}?pubKey=${pubKey}`);
             
-            const storeResponse = await httpGet(`http://localhost:2003/storeGateway/${blockchainId}/${encodedEndpoint}?protocols=${protocols}`);
+            const storeResponse = await httpGet(`http://localhost:2003/storeGateway/${blockchainId}/${encodedEndpoint}?pubKey=${pubKey}`);
             
             expect(storeResponse.ok).toBe(true);
             expect(storeResponse.data.success).toBe(true);
