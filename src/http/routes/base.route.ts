@@ -26,13 +26,6 @@ class BaseRoute implements Routes {
 		this.router.get(`${this.path}debugClosestNodes/:value`, this.baseController.debugClosestNodes);
 		this.router.get(`${this.path}debugStorage/:key`, this.baseController.debugStorage);
 
-		// = MESSAGE OPERATIONS =
-		// DELETE AFTERWARDS
-		this.router.get(`${this.path}getNodeMessages`, this.baseController.getNodeMessages);
-		this.router.get(`${this.path}getNodeUdpMessages`, this.baseController.getNodeUDPMessages);
-		this.router.post(`${this.path}postDirectMessage`, this.baseController.postDirectMessage);
-		this.router.post(`${this.path}postBroadcast`, this.baseController.postBroadcast);
-
 		// = ENHANCED GATEWAY OPERATIONS =
 		
 		// Gateway Discovery
@@ -57,11 +50,6 @@ class BaseRoute implements Routes {
 		// Key discovery
 		this.router.post(`${this.path}crypto/discover`, this.baseController.discoverKeys);
 		this.router.get(`${this.path}crypto/exchange-keys`, this.baseController.triggerKeyExchange);
-
-		
-		// 3. Import simplified (GET-based info) NOT USED DELETE AFTERWARDS
-		this.router.get(`${this.path}crypto/import`, this.baseController.importKeys);
-		this.router.post(`${this.path}crypto/import`, this.baseController.importKeys); 
 		
 		// = SECURE OPERATIONS =
 		

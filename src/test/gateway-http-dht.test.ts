@@ -102,7 +102,6 @@ describe('Gateway HTTP API Tests', () => {
             const gatewayData = {
                 blockchainId: "hardhat1",
                 endpoint: "http://localhost:8545/",
-                supportedProtocols: ["SATP"]
             };
             
             console.log('\nTesting Gateway Store via HTTP POST');
@@ -185,21 +184,19 @@ describe('Gateway HTTP API Tests', () => {
         test('should store gateway with custom protocols', async () => {
             const blockchainId = "polygon1";
             const endpoint = "http://localhost:8547";
-            const protocols = "SATP,ILP,HTLC";
+            const pubKey = "aaaaaaaaaaaaaaaa";
             const encodedEndpoint = encodeURIComponent(endpoint);
             
             console.log('\nTesting Gateway Store with Custom Protocols');
             console.log('==============================================');
-            console.log(`URL: http://localhost:2003/storeGateway/${blockchainId}/${encodedEndpoint}?protocols=${protocols}`);
+            console.log(`URL: http://localhost:2003/storeGateway/${blockchainId}/${encodedEndpoint}?pubKey=${pubKey}`);
             
-            const storeResponse = await httpGet(`http://localhost:2003/storeGateway/${blockchainId}/${encodedEndpoint}?protocols=${protocols}`);
+            const storeResponse = await httpGet(`http://localhost:2003/storeGateway/${blockchainId}/${encodedEndpoint}?pubKey=${pubKey}`);
             
             expect(storeResponse.ok).toBe(true);
             expect(storeResponse.data.success).toBe(true);
-            expect(storeResponse.data.gateway.supportedProtocols).toEqual(['SATP', 'ILP', 'HTLC']);
             
             console.log(`Gateway with custom protocols stored`);
-            console.log(`Protocols: ${storeResponse.data.gateway.supportedProtocols.join(', ')}`);
         }, 90000);
 
         test('should handle invalid gateway data', async () => {
@@ -565,10 +562,9 @@ describe('Gateway HTTP API Tests', () => {
             const testGateway = {
                 blockchainId: "ethereum-test",
                 endpoint: "http://localhost:8545",
-                supportedProtocols: ["SATP", "ILP"]
             };
             
-            console.log('\n🔄 Complete Gateway Workflow Test');
+            console.log('\n Complete Gateway Workflow Test');
             console.log('=================================');
             
             console.log('\nStoring gateway');

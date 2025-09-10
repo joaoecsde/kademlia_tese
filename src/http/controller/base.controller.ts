@@ -1,8 +1,6 @@
 import { NextFunction, Request, Response } from "express";
 import { GatewayInfo } from "../../gateway/gateway";
 import KademliaNode from "../../node/node";
-import { MessageType, Transports } from "../../types/messageTypes";
-import { BroadcastData, DirectData } from "../../types/udpTransportTypes";
 import { hashKeyAndmapToKeyspace } from "../../utils/nodeUtils";
 
 class BaseController {
@@ -22,56 +20,6 @@ class BaseController {
 
 	public getNodeBuckets = async (req: Request, res: Response, next: NextFunction) => {
 		return res.json({ message: this.node.table.getAllBuckets() });
-	};
-
-	public postDirectMessage = (req: Request, res: Response, next: NextFunction) => {
-		try {
-			const payload: DirectData = {
-				type: "direct-message",
-				message: `received direct message from node ${this.node.port}`,
-				to: Number(req.body.id),
-			};
-			this.node.sendTcpTransportMessage<DirectData>(MessageType.Broadcast, payload);
-			res.send("success");
-		} catch (error) {
-			next(error);
-		}
-	};
-
-	public postBroadcast = (req: Request, res: Response, next: NextFunction) => {
-		try {
-			const payload: BroadcastData = {
-				type: "broadcast-message",
-				message: `received broadcast message from node ${this.node.port}`,
-				peers: [],
-			};
-			this.node.sendTcpTransportMessage<BroadcastData>(MessageType.Broadcast, payload);
-			res.send("success");
-		} catch (error) {
-			next(error);
-		}
-	};
-
-	public getNodeMessages = (req: Request, res: Response, next: NextFunction) => {
-		try {
-			const type = req.query.type as MessageType;
-			const messagesMap = this.node.getTransportMessages(Transports.Tcp, type);
-			const messages = Array.from(messagesMap.values());
-			return res.json({ result: messages });
-		} catch (error) {
-			next(error);
-		}
-	};
-
-	public getNodeUDPMessages = (req: Request, res: Response, next: NextFunction) => {
-		try {
-			const type = req.query.type as MessageType;
-			const messagesMap = this.node.getTransportMessages(Transports.Udp, type);
-			const messages = Array.from(messagesMap.values());
-			return res.json({ result: messages });
-		} catch (error) {
-			next(error);
-		}
 	};
 
 	public findClosestNode = (req: Request, res: Response, next: NextFunction) => {
@@ -674,40 +622,7 @@ class BaseController {
 		}
 	};
 
-	public exportKeys = async (req: Request, res: Response, next: NextFunction) => {
-		try {
-		const backup = this.node.exportKeys();
-		
-		return res.json({
-			success: true,
-			nodeId: this.node.nodeId,
-			backup,
-			message: 'Keys exported successfully',
-			timestamp: Date.now()
-		});
-		} catch (error) {
-		next(error);
-		}
-	};
-
-	public importKeys = async (req: Request, res: Response, next: NextFunction) => {
-		try {
-			// For testing, we'll create a simple test key import
-			// In production, you'd want this as POST with proper validation
-			
-			return res.json({
-			message: 'Key import endpoint available',
-			note: 'For security, use POST method with proper backup data',
-			example: 'POST /crypto/import with backup data in body',
-			currentKeys: this.node.getKnownPublicKeys().length,
-			timestamp: Date.now()
-			});
-		} catch (error) {
-			next(error);
-		}
-	};
-
-  // === SECURE DHT OPERATIONS ===
+  	// === SECURE DHT OPERATIONS ===
 
 	public secureStore = async (req: Request, res: Response, next: NextFunction) => {
 		try {

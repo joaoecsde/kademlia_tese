@@ -139,7 +139,6 @@ describe('Secure Gateway HTTP API Tests', () => {
             const gatewayData = {
                 blockchainId: "hardhat-secure-1",
                 endpoint: "http://localhost:8545/",
-                supportedProtocols: ["SATP"]
             };
             
             console.log('\n Testing Secure Gateway Store via HTTP POST');
@@ -226,21 +225,19 @@ describe('Secure Gateway HTTP API Tests', () => {
         test('should store secure gateway with custom protocols', async () => {
             const blockchainId = "polygon-secure-1";
             const endpoint = "http://localhost:8547";
-            const protocols = "SATP,ILP,HTLC";
+            const pubKey = "aaaaaaaaaaaaaaaa";
             const encodedEndpoint = encodeURIComponent(endpoint);
             
             console.log('\n Testing Secure Gateway Store with Custom Protocols');
-            console.log(`URL: http://localhost:2003/secure/storeGateway/${blockchainId}/${encodedEndpoint}?protocols=${protocols}`);
+            console.log(`URL: http://localhost:2003/secure/storeGateway/${blockchainId}/${encodedEndpoint}?pubKey=${pubKey}`);
             
-            const storeResponse = await httpGet(`http://localhost:2003/secure/storeGateway/${blockchainId}/${encodedEndpoint}?protocols=${protocols}`);
+            const storeResponse = await httpGet(`http://localhost:2003/secure/storeGateway/${blockchainId}/${encodedEndpoint}?pubKey=${pubKey}`);
             
             expect(storeResponse.ok).toBe(true);
             expect(storeResponse.data.success).toBe(true);
-            expect(storeResponse.data.gateway.supportedProtocols).toEqual(['SATP', 'ILP', 'HTLC']);
             expect(storeResponse.data.storage.encrypted).toBe(true);
             
             console.log(`Secure gateway with custom protocols stored`);
-            console.log(`Protocols: ${storeResponse.data.gateway.supportedProtocols.join(', ')}`);
             console.log(`Encrypted: ${storeResponse.data.storage.encrypted}`);
             console.log(`Encryption Coverage: ${storeResponse.data.storage.encryptionCoverage}`);
         }, 90000);
