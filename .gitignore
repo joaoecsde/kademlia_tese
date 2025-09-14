@@ -6,3 +6,6 @@ node_modules/
 .env
 env
 .env.*
+
+/test-results
+test-results/
