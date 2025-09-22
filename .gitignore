@@ -9,3 +9,15 @@ env
 
 /test-results
 test-results/
+
+/test-results-k3
+test-results/k3
+
+/test-results-k6
+test-results/k6
+
+/test-results-k12
+test-results/k12
+
+/test-results-k20
+test-results/k20

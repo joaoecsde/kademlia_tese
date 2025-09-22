@@ -68,7 +68,7 @@ class KademliaNode extends AbstractNode {
   		return this.registeredGateways;
 	}
 
-	private readonly discScheduler: DiscoveryScheduler;
+	public discScheduler: DiscoveryScheduler;
 	
 	constructor(id: number, port: number) {
 		super(id, port, "kademlia");

@@ -1,6 +1,6 @@
 import crypto, { BinaryLike, createHash } from "crypto";
 import * as Mathjs from "mathjs";
-import { BIT_SIZE, HASH_SIZE } from "../node/constants";
+import { BIT_SIZE } from "../node/constants";
 import { Peer } from "../peer/peer";
 
 export const XOR = (n1: number, n2: number) => {
@@ -67,8 +67,8 @@ export const generateHash = (data: string) => {
 };
 
 export const hashKeyAndmapToKeyspace = (data: string) => {
-	const hash = generateHash(data).substring(0, 8);
-	return parseInt(hash, 16) % HASH_SIZE;
+	const hash = generateHash(data);
+    return parseInt(hash.substring(0, 8), 16); 
 };
 
 export const isArray = (value: any) => Array.isArray(value);
